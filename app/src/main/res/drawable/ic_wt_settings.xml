@@ -1,0 +1,16 @@
+<!--
+  WordTaker settings entry icon: a standard minimal single-colour gear (齿轮).
+  Thin line-style, transparent background, tinted at the call site.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Gear body: outer toothed ring (filled, even-odd cut centre hole) -->
+    <path
+        android:fillColor="@android:color/white"
+        android:fillType="evenOdd"
+        android:pathData="M10.6,1.6 L13.4,1.6 L13.9,4.2 C14.6,4.4 15.2,4.7 15.8,5.1 L18.2,3.9 L20.1,5.8 L18.9,8.2 C19.3,8.8 19.6,9.4 19.8,10.1 L22.4,10.6 L22.4,13.4 L19.8,13.9 C19.6,14.6 19.3,15.2 18.9,15.8 L20.1,18.2 L18.2,20.1 L15.8,18.9 C15.2,19.3 14.6,19.6 13.9,19.8 L13.4,22.4 L10.6,22.4 L10.1,19.8 C9.4,19.6 8.8,19.3 8.2,18.9 L5.8,20.1 L3.9,18.2 L5.1,15.8 C4.7,15.2 4.4,14.6 4.2,13.9 L1.6,13.4 L1.6,10.6 L4.2,10.1 C4.4,9.4 4.7,8.8 5.1,8.2 L3.9,5.8 L5.8,3.9 L8.2,5.1 C8.8,4.7 9.4,4.4 10.1,4.2 Z M12,8.4 A3.6,3.6 0 1 0 12,15.6 A3.6,3.6 0 1 0 12,8.4 Z" />
+</vector>

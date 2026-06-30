@@ -1,0 +1,9 @@
+[
+  [
+    { "$": "auto_text_key", "code":  104, "label": "一" },
+    { "$": "auto_text_key", "code":  115, "label": "丨" },
+    { "$": "auto_text_key", "code":  112, "label": "丿" },
+    { "$": "auto_text_key", "code":  110, "label": "丶" },
+    { "$": "auto_text_key", "code":  122, "label": "乙" }
+  ]
+]

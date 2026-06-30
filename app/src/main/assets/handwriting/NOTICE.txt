@@ -1,0 +1,24 @@
+弦外小猫 (KittyEcho) — 手写输入识别数据署名 / Handwriting recognition data attribution
+==============================================================================
+
+本应用的离线手写识别模板库 (mmah.hwr) 源自 "Make Me a Hanzi" 项目的汉字笔迹
+中位线 (stroke median) 数据，该数据派生自 Arphic (文鼎) 公众授权字体。
+
+The offline handwriting recognition template database bundled with this app
+(assets/handwriting/mmah.hwr, JSON content) is derived from the Chinese-character
+stroke-median data of the "Make Me a Hanzi" project, which itself is derived from
+Arphic (文鼎) Public License fonts.
+
+Data source:
+  - Make Me a Hanzi — https://github.com/skishore/makemeahanzi
+  - Pre-analyzed sub-stroke packing format — HanziLookupJS
+    https://github.com/gugray/HanziLookupJS (mmah.json)
+
+License of the data:
+  - Arphic Public License (文鼎公众授权书). The Arphic-derived character outline /
+    stroke data may be freely distributed provided this attribution notice is kept.
+
+NOTE: The recognition / matching algorithm in this app
+(com.wordtaker.keyboard.ime.nlp.handwriting.*) is an independent WordTaker
+implementation. No third-party recognizer source code is reused — only the
+permissively-licensed Arphic-derived stroke data is bundled.

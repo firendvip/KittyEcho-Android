@@ -1,0 +1,17 @@
+[
+  [
+    { "$": "auto_text_key", "code":   50, "label": "2 ABC" },
+    { "$": "auto_text_key", "code":   51, "label": "3 DEF" },
+    { "$": "auto_text_key", "code":   52, "label": "4 GHI" }
+  ],
+  [
+    { "$": "auto_text_key", "code":   53, "label": "5 JKL" },
+    { "$": "auto_text_key", "code":   54, "label": "6 MNO" },
+    { "$": "auto_text_key", "code":   55, "label": "7 PQRS" }
+  ],
+  [
+    { "$": "auto_text_key", "code":   56, "label": "8 TUV" },
+    { "$": "auto_text_key", "code":   57, "label": "9 WXYZ" },
+    { "$": "auto_text_key", "code":   49, "label": "1" }
+  ]
+]

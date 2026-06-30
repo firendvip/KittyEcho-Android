@@ -1,0 +1,13 @@
+<!-- Minimal thin-line history (clock with rewind arrow). Tinted at call site. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M12,4a8,8 0 1 1 -7.6,5.5l1.9,0.62A6,6 0 1 0 12,6a5.97,5.97 0 0 0 -4.3,1.82l1.6,1.6h-4.3v-4.3l1.3,1.3A7.97,7.97 0 0 1 12,4z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M11,8h1.6v3.9l3.1,1.84l-0.8,1.36l-3.9,-2.3z" />
+</vector>

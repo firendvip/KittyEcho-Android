@@ -1,0 +1,10 @@
+<!-- Minimal thin-line collapse (chevron down). Tinted at the call site. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M6.4,9.2l1.2,-1.1l4.4,4.2l4.4,-4.2l1.2,1.1l-5.6,5.4z" />
+</vector>
