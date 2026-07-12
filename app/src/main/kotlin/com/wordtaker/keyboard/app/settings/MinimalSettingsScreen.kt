@@ -147,12 +147,19 @@ fun MinimalSettingsScreen() = FlorisScreen {
 
             Spacer(Modifier.height(20.dp))
 
-            // Tone
+            // Tone + 云词库联想 — grouped in one card (both are typing-behaviour toggles).
+            val cloudEnabled by prefs.cloudDictionary.cloudEnabled.observeAsState()
             SettingsCard(cardBg) {
                 ToggleRow(
                     title = "提示音",
                     checked = state.tone,
                     onCheckedChange = { scope.launch { repo.setTone(it) } },
+                )
+                ToggleRow(
+                    title = "云词库联想",
+                    subtitle = "打拼音时联网补充更多候选词，只上传拼音，不上传输入内容",
+                    checked = cloudEnabled,
+                    onCheckedChange = { scope.launch { prefs.cloudDictionary.cloudEnabled.set(it) } },
                 )
             }
 

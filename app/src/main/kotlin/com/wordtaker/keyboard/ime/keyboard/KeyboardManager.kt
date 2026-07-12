@@ -309,6 +309,19 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
     }
 
     /**
+     * Inserts a glide-typed pinyin spelling (e.g. "nihao") as plain, non-finalized text
+     * instead of a finished [commitGesture] commit. Unlike [commitGesture] this does NOT
+     * advance the editor's "last commit position", so the standard composing-region
+     * detection (see [com.wordtaker.keyboard.ime.nlp.pinyin.PinyinLanguageProvider.determineLocalComposing])
+     * picks the inserted letters up as pinyin composing text, exactly as if the user had
+     * typed them key-by-key. The existing NLP suggestion pipeline then reacts to the
+     * content change and produces real Hanzi candidates for the user to pick from.
+     */
+    fun commitGlidePinyinSpelling(pinyin: String) {
+        editorInstance.commitText(pinyin.lowercase())
+    }
+
+    /**
      * Changes a word to the current case.
      * eg if [KeyboardState.isUppercase] is true, abc -> ABC
      *    if [caps]     is true, abc -> Abc

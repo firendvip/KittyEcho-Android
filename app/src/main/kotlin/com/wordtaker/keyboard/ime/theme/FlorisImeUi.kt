@@ -60,6 +60,23 @@ enum class FlorisImeUi(val elementName: String, val resId: Int?) {
         elementName = "key-hint",
         resId = R.string.snygg__rule_element__key_hint,
     ),
+    // WordTaker T9 (P0-1): dedicated elements for the split digit/letter-group key rendering
+    // on the pinyin T9 keypad. No resId — internal, not exposed in the theme editor picker.
+    KeyT9Digit(
+        elementName = "key-t9-digit",
+        resId = null,
+    ),
+    KeyT9Letters(
+        elementName = "key-t9-letters",
+        resId = null,
+    ),
+    // WordTaker (P1-1 方案2): 1dp bottom dark edge under each key cap (WeChat-style depth).
+    // Themes opt in by defining a background color; absence = no edge (borderless variants).
+    // No resId — internal, not exposed in the theme editor picker.
+    KeyEdge(
+        elementName = "key-edge",
+        resId = null,
+    ),
     KeyPopupBox(
         elementName = "key-popup-box",
         resId = R.string.snygg__rule_element__key_popup_box,

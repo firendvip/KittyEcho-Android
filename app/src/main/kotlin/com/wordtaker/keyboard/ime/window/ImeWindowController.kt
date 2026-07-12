@@ -206,16 +206,28 @@ class ImeWindowController(
         isFullscreenInputRequired: Boolean,
     ) {
         val rootInsets = activeRootInsets.value
-        val windowInsets = activeWindowInsets.value ?: return
+        val windowInsets = activeWindowInsets.value
         val rootBounds = rootInsets.boundsPx
-        val windowBounds = windowInsets.boundsPx
         val windowSpec = activeWindowSpec.value
         val editorState = editor.state.value
 
+        // BUG #11: On the very first frame the window hasn't been measured yet, so
+        // activeWindowInsets is still null. Previously we returned WITHOUT reporting any
+        // insets — the IME framework then received a zero/undefined content height, which
+        // manifested as black bands (partial-height window) and sometimes the keyboard not
+        // coming up. Instead of returning, fall back to reporting the whole root as the
+        // touchable area and (for fixed mode) treat the content top as the root bottom until
+        // the real window bounds arrive a frame later. This guarantees a non-degenerate
+        // response every time onComputeInsets is called.
+        val windowBounds = windowInsets?.boundsPx
+
         when (windowSpec) {
             is ImeWindowSpec.Fixed -> {
-                outInsets.contentTopInsets = windowBounds.top
-                outInsets.visibleTopInsets = windowBounds.top
+                // Use the measured window top when known; otherwise fall back to the root
+                // bottom (no forced app resize) so we never report a zero-height content inset.
+                val contentTop = windowBounds?.top ?: rootBounds.bottom
+                outInsets.contentTopInsets = contentTop
+                outInsets.visibleTopInsets = contentTop
             }
             is ImeWindowSpec.Floating -> {
                 outInsets.contentTopInsets = rootBounds.bottom
@@ -232,11 +244,14 @@ class ImeWindowController(
                 )
             }
             else -> {
+                // Fall back to the full root bounds when the window hasn't been measured
+                // yet, so touches always land somewhere valid on the first frame.
+                val region = windowBounds ?: rootBounds
                 outInsets.touchableRegion.set(
-                    windowBounds.left,
-                    windowBounds.top,
-                    windowBounds.right,
-                    windowBounds.bottom,
+                    region.left,
+                    region.top,
+                    region.right,
+                    region.bottom,
                 )
             }
         }

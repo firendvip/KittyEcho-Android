@@ -1,7 +1,11 @@
 package com.wordtaker.keyboard.wordtaker.di
 
 import android.content.Context
+import com.wordtaker.keyboard.wordtaker.account.AccountRepository
 import com.wordtaker.keyboard.wordtaker.audio.ToneController
+import com.wordtaker.keyboard.wordtaker.backend.BackendClient
+import com.wordtaker.keyboard.wordtaker.backend.DeviceIdentity
+import com.wordtaker.keyboard.wordtaker.backend.TokenStore
 import com.wordtaker.keyboard.wordtaker.history.HistoryDatabase
 import com.wordtaker.keyboard.wordtaker.history.HistoryRepository
 import com.wordtaker.keyboard.wordtaker.polish.Polisher
@@ -18,7 +22,7 @@ import java.util.UUID
  * constructed lazily from an application [Context].
  *
  * Engine wiring:
- *  - ASR     -> RealSpeechEngine (sherpa-onnx SenseVoice, on-device) when
+ *  - ASR     -> RealSpeechEngine (sherpa-onnx streaming Zipformer, on-device) when
  *               [USE_REAL_ASR] is true; falls back to MockSpeechEngine otherwise.
  *  - Polish  -> RealPolisher(RelayClient)  [real relay]
  *  - History -> Room repository            [real, 入库]
@@ -49,14 +53,32 @@ object AppGraph {
 
     val toneController: ToneController by lazy { ToneController(requireContext()) }
 
-    // ASR: real on-device sherpa-onnx SenseVoice; mock as a debug fallback.
+    // ASR: real on-device sherpa-onnx streaming Zipformer; mock as a debug fallback.
     val speechEngine: SpeechEngine by lazy {
         if (USE_REAL_ASR) RealSpeechEngine(requireContext()) else MockSpeechEngine()
     }
 
-    // Polish: real relay-backed polisher.
+    // Backend billing/auth stack (阶段3): token store + API client + account repo.
+    val tokenStore: TokenStore by lazy { TokenStore(requireContext()) }
+
+    val backendClient: BackendClient by lazy {
+        BackendClient(
+            deviceId = DeviceIdentity.get(requireContext()),
+            tokenProvider = { tokenStore.accessToken() },
+        )
+    }
+
+    val accountRepository: AccountRepository by lazy {
+        AccountRepository(backendClient, tokenStore)
+    }
+
+    // Polish: billing backend first, legacy relay as graceful fallback.
     val polisher: Polisher by lazy {
-        RealPolisher(RelayClient(deviceId()))
+        RealPolisher(
+            backend = backendClient,
+            relay = RelayClient(deviceId()),
+            onAuthExpired = { tokenStore.clear() },
+        )
     }
 
     /** Stable per-install device id, persisted in a small SharedPreferences file. */

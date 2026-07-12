@@ -139,16 +139,42 @@ fun ComputingEvaluator.computeLabel(data: KeyData): String? {
         when (data.code) {
             KeyCode.PHONE_PAUSE -> evaluator.context()?.getString(R.string.key__phone_pause)
             KeyCode.PHONE_WAIT -> evaluator.context()?.getString(R.string.key__phone_wait)
-            // WordTaker 中/英 toggle: show the current input language on the key.
-            KeyCode.LANGUAGE_SWITCH -> if (evaluator.state.isEnglishMode) "英" else "中"
+            // WordTaker 中/英 toggle: the key now VISUALLY renders BOTH "中" and "英" with the
+            // current mode highlighted (see TextKeyButton special-case in TextKeyboardLayout).
+            // This label is kept as a text fallback / for non-visual consumers.
+            KeyCode.LANGUAGE_SWITCH -> "中/英"
             KeyCode.SPACE, KeyCode.CJK_SPACE -> {
-                // WeChat-style spacebar: no subtype/language label ("拼音罗马字"). A mic
-                // icon is shown instead (see computeImageVector below).
-                null
+                // WeChat-style spacebar: no subtype/language label ("拼音罗马字"). On the
+                // main keyboard a mic icon is shown instead (see computeImageVector). On the
+                // numeric calculator pad the key reads "空格" (matching the target design);
+                // on the symbols keyboards it is a plain, icon-less space bar.
+                when (evaluator.keyboard.mode) {
+                    KeyboardMode.NUMERIC,
+                    KeyboardMode.NUMERIC_ADVANCED -> "空格"
+                    else -> null
+                }
             }
             KeyCode.IME_UI_MODE_TEXT,
             KeyCode.VIEW_CHARACTERS -> {
-                evaluator.context()?.getString(R.string.key__view_characters)
+                // WordTaker: on the symbols/numeric keyboards, the "back to letters" key shows
+                // a "←" arrow (matching the target design) instead of the "ABC" label.
+                when (evaluator.keyboard.mode) {
+                    KeyboardMode.SYMBOLS,
+                    KeyboardMode.SYMBOLS2,
+                    KeyboardMode.NUMERIC,
+                    KeyboardMode.NUMERIC_ADVANCED -> "←"
+                    else -> evaluator.context()?.getString(R.string.key__view_characters)
+                }
+            }
+            // WordTaker: the ENTER key shows a "换行" text label on the symbols/numeric keyboards
+            // (matching the target design). The icon is suppressed for these modes in
+            // computeImageVector below.
+            KeyCode.ENTER -> when (evaluator.keyboard.mode) {
+                KeyboardMode.SYMBOLS,
+                KeyboardMode.SYMBOLS2,
+                KeyboardMode.NUMERIC,
+                KeyboardMode.NUMERIC_ADVANCED -> "换行"
+                else -> null
             }
             KeyCode.VIEW_NUMERIC,
             KeyCode.VIEW_NUMERIC_ADVANCED -> {
@@ -161,7 +187,13 @@ fun ComputingEvaluator.computeLabel(data: KeyData): String? {
                 evaluator.context()?.getString(R.string.key__view_phone2)
             }
             KeyCode.VIEW_SYMBOLS -> {
-                evaluator.context()?.getString(R.string.key__view_symbols)
+                // WordTaker: on the numeric calculator pad this key reads "符号" (jump to the
+                // symbols keyboard) instead of the default "123" label.
+                when (evaluator.keyboard.mode) {
+                    KeyboardMode.NUMERIC,
+                    KeyboardMode.NUMERIC_ADVANCED -> "符号"
+                    else -> evaluator.context()?.getString(R.string.key__view_symbols)
+                }
             }
             KeyCode.VIEW_SYMBOLS2 -> {
                 evaluator.context()?.getString(R.string.key__view_symbols2)
@@ -234,6 +266,15 @@ fun ComputingEvaluator.computeImageVector(data: KeyData): ImageVector? {
             Icons.AutoMirrored.Outlined.Backspace
         }
         KeyCode.ENTER -> {
+            // WordTaker: on the symbols/numeric keyboards the ENTER key renders the "换行" text
+            // label (see computeLabel) instead of an icon, so suppress the icon there.
+            when (evaluator.keyboard.mode) {
+                KeyboardMode.SYMBOLS,
+                KeyboardMode.SYMBOLS2,
+                KeyboardMode.NUMERIC,
+                KeyboardMode.NUMERIC_ADVANCED -> return null
+                else -> {}
+            }
             val imeOptions = evaluator.editorInfo.imeOptions
             val inputAttributes = evaluator.editorInfo.inputAttributes
             if (imeOptions.flagNoEnterAction || inputAttributes.flagTextMultiLine) {
@@ -278,16 +319,22 @@ fun ComputingEvaluator.computeImageVector(data: KeyData): ImageVector? {
         }
         KeyCode.SPACE, KeyCode.CJK_SPACE -> {
             when (evaluator.keyboard.mode) {
+                // Numeric calculator pad shows a "空格" text label (see computeLabel), so
+                // suppress the icon. Symbols keyboards get a plain, icon-less space bar to
+                // match the target design (no mic).
                 KeyboardMode.NUMERIC,
                 KeyboardMode.NUMERIC_ADVANCED,
+                KeyboardMode.SYMBOLS,
+                KeyboardMode.SYMBOLS2 -> null
                 KeyboardMode.PHONE,
                 KeyboardMode.PHONE2 -> {
                     Icons.Default.SpaceBar
                 }
-                // WeChat-style spacebar in the main keyboard: a mic icon instead of
-                // a language label. Short-press still types a space / commits the
-                // first candidate (handled elsewhere).
-                else -> Icons.Default.KeyboardVoice
+                // WeChat-style spacebar in the main keyboard: a small voice-level
+                // WAVEFORM glyph (matches the reference) instead of a language label
+                // or a mic. Short-press still types a space / commits the first
+                // candidate (handled elsewhere).
+                else -> this.context()?.vectorResource(R.drawable.ic_wt_wave)
             }
         }
         KeyCode.UNDO -> {

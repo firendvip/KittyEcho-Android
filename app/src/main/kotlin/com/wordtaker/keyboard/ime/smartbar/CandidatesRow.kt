@@ -116,6 +116,7 @@ fun CandidatesRow(modifier: Modifier = Modifier) {
                     modifier = candidateModifier,
                     candidate = candidate,
                     displayMode = displayMode,
+                    isFirst = n == 0,
                     onClick = {
                         // Can't use candidate directly
                         keyboardManager.commitCandidate(candidates[n])
@@ -141,6 +142,7 @@ private fun CandidateItem(
     candidate: SuggestionCandidate,
     displayMode: CandidatesDisplayMode,
     modifier: Modifier = Modifier,
+    isFirst: Boolean = false,
     onClick: () -> Unit = { },
     onLongPress: () -> Boolean = { false },
     longPressDelay: Long,
@@ -152,7 +154,12 @@ private fun CandidateItem(
     } else {
         FlorisImeUi.SmartbarCandidateWord
     }.elementName
-    val attributes = mapOf("auto-commit" to if (candidate.isEligibleForAutoCommit) 1 else 0)
+    // WordTaker (P2-2): "first" marks the top-ranked candidate for the WeChat-style green
+    // highlight in the theme. Pure visual attribute — auto-commit behavior is untouched.
+    val attributes = mapOf(
+        "auto-commit" to if (candidate.isEligibleForAutoCommit) 1 else 0,
+        "first" to if (isFirst) 1 else 0,
+    )
     val selector = if (isPressed) SnyggSelector.PRESSED else SnyggSelector.NONE
 
     SnyggRow(

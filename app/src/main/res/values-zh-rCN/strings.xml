@@ -445,6 +445,8 @@
     <string name="pref__suggestion__block_possibly_offensive__label" comment="Preference title">屏蔽可能有冒犯性的词语</string>
     <string name="pref__suggestion__api30_inline_suggestions_enabled__summary" comment="Preference summary">显示由自动填充服务提供的内嵌式建议</string>
     <string name="pref__suggestion__incognito_mode__label" comment="Label of Incognito mode preference in Typing">无痕模式</string>
+    <string name="pref__dict__cloud_enabled__label" comment="Preference title">云词库联想</string>
+    <string name="pref__dict__cloud_enabled__summary" comment="Preference summary">打拼音时联网补充更多候选词，只上传拼音，不上传输入内容</string>
     <string name="pref__correction__title" comment="Preference group title">更正</string>
     <string name="pref__correction__auto_capitalization__label" comment="Preference title">自动大写</string>
     <string name="pref__correction__auto_capitalization__summary" comment="Preference summary">根据当前输入上下文将单词首字母大写</string>

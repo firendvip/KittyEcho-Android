@@ -168,6 +168,32 @@ class TextKey(override val data: AbstractKeyData) : Key(data) {
                     else -> 1.00f
                 }
             }
+
+            // WordTaker T9 (P0-2): the pinyin T9 keypad uses a full-width 5-column grid —
+            // narrow function/punctuation columns on both sides, three wide digit columns in
+            // the middle (WeChat/Sogou proportions: side 1.4, digit 2.4, row total = 10.0).
+            // Uniform shrink keeps all three grid rows column-aligned when the row margin
+            // clips the requested width.
+            if (keyboardMode == KeyboardMode.CHARACTERS &&
+                evaluator.subtype.layoutMap.characters.componentId == "pinyin_t9"
+            ) {
+                when (computed.code) {
+                    in 49..57 -> { // digit keys '1'..'9'
+                        flayWidthFactor = 2.4f
+                        flayShrink = 1.0f
+                        flayGrow = 0.0f
+                    }
+                    KeyCode.VIEW_SYMBOLS, KeyCode.DELETE,
+                    0xFF0C, 0x3002, 0xFF1F, 0xFF01 -> { // ，。？！ side columns
+                        flayWidthFactor = 1.4f
+                        flayShrink = 1.0f
+                        flayGrow = 0.0f
+                    }
+                    KeyCode.LANGUAGE_SWITCH -> { // bottom row: align with the left column
+                        flayWidthFactor = 1.4f
+                    }
+                }
+            }
         }
     }
 

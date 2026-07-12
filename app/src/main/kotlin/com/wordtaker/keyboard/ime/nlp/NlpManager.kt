@@ -31,12 +31,15 @@ import com.wordtaker.keyboard.ime.media.emoji.EmojiSuggestionProvider
 import com.wordtaker.keyboard.ime.nlp.han.HanShapeBasedLanguageProvider
 import com.wordtaker.keyboard.ime.nlp.handwriting.HandwritingLanguageProvider
 import com.wordtaker.keyboard.ime.nlp.latin.LatinLanguageProvider
+import com.wordtaker.keyboard.ime.nlp.pinyin.CloudDictRequest
+import com.wordtaker.keyboard.ime.nlp.pinyin.CloudDictionaryAugmenter
 import com.wordtaker.keyboard.ime.nlp.pinyin.PinyinLanguageProvider
 import com.wordtaker.keyboard.ime.nlp.pinyin.ShuangpinLanguageProvider
 import com.wordtaker.keyboard.ime.nlp.pinyin.T9LanguageProvider
 import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.lib.util.NetworkUtils
 import com.wordtaker.keyboard.subtypeManager
+import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -91,6 +94,21 @@ class NlpManager(context: Context) {
     private var internalSuggestions by Delegates.observable(SystemClock.uptimeMillis() to listOf<SuggestionCandidate>()) { _, _, _ ->
         scope.launch { assembleCandidates() }
     }
+
+    // 云词库联想增强层（见 CloudDictionaryAugmenter 类注释：composing 候选补充，非滑行几何语料）。
+    // reqTime 精确匹配才回填，保证过期(已被更新 composing 覆盖)的云响应不会覆盖更新的候选。
+    private val cloudDictAugmenter = CloudDictionaryAugmenter(
+        scope = scope,
+        suggest = { pinyin, limit -> AppGraph.backendClient.dictSuggest(pinyin = pinyin, limit = limit) },
+        isEnabled = { prefs.cloudDictionary.cloudEnabled.get() },
+        onMerged = { reqTime, merged ->
+            internalSuggestionsGuard.withLock {
+                if (internalSuggestions.first == reqTime) {
+                    internalSuggestions = reqTime to merged
+                }
+            }
+        },
+    )
 
     private val _activeCandidatesFlow = MutableStateFlow(listOf<SuggestionCandidate>())
     val activeCandidatesFlow = _activeCandidatesFlow.asStateFlow()
@@ -238,15 +256,36 @@ class NlpManager(context: Context) {
                     )
                 }
             }
+            val merged = buildList {
+                addAll(emojiSuggestions)
+                addAll(suggestions)
+            }
             internalSuggestionsGuard.withLock {
                 if (internalSuggestions.first < reqTime) {
-                    internalSuggestions = reqTime to buildList {
-                        addAll(emojiSuggestions)
-                        addAll(suggestions)
-                    }
+                    internalSuggestions = reqTime to merged
                 }
             }
+            requestCloudDictAugmentIfApplicable(subtype, content, reqTime, merged)
         }
+    }
+
+    /**
+     * 拼音 QWERTY composing 之外，异步投递一次云词库联想请求（非阻塞、debounce+缓存在
+     * [CloudDictionaryAugmenter] 内完成）。仅当当前 provider 是拼音 QWERTY、非隐私会话、
+     * composing 能解析出合法拼音字母时才投递；其余情况（双拼/T9/英文/隐私模式等）一律跳过——
+     * 云接口契约要求 `^[a-z]+$`，双拼/T9 的 composing 不是字面拼音，不能直接转发。
+     */
+    private fun requestCloudDictAugmentIfApplicable(
+        subtype: Subtype,
+        content: EditorContent,
+        reqTime: Long,
+        localCandidates: List<SuggestionCandidate>,
+    ) {
+        if (subtype.nlpProviders.suggestion != PinyinLanguageProvider.ProviderId) return
+        if (keyboardManager.activeState.isIncognitoMode) return
+        val pinyin = content.composingText.lowercase().filter { it in 'a'..'z' }
+        if (pinyin.isEmpty()) return
+        cloudDictAugmenter.request(CloudDictRequest(reqTime, pinyin, localCandidates))
     }
 
     fun suggestDirectly(suggestions: List<SuggestionCandidate>) {

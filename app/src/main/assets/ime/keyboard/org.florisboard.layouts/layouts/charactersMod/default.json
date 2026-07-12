@@ -6,11 +6,9 @@
   ],
   [
     { "code": -202, "label": "view_symbols", "type": "system_gui" },
-    { "$": "variation_selector",
-      "default":  { "code":   44, "label": ",", "groupId": 1 },
-      "email":    { "code":   64, "label": "@", "groupId": 1 },
-      "uri":      { "code":   47, "label": "/", "groupId": 1 }
-    },
+    { "code": 65292, "label": "，", "groupId": 1, "popup": {
+      "main": { "code": 12290, "label": "。" }
+    } },
     { "code":   32, "label": "space" },
     { "code": -227, "label": "language_switch", "type": "system_gui" },
     { "code":   10, "label": "enter", "groupId": 3, "type": "enter_editing" }

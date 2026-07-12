@@ -17,6 +17,10 @@
 package com.wordtaker.keyboard.ime.popup
 
 import android.content.Context
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.requiredSize
@@ -28,6 +32,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -274,21 +280,22 @@ class PopupUiController(
             ))
         }
 
-        // Calculate layout params
+        // Calculate layout params.
+        // WordTaker (P0-3.4): the extended popup shares the detached-bubble geometry — row
+        // height = key height x 1.1, bottom edge = key top - 4dp (same gap as the preview).
+        val elemHeight = key.visibleBounds.height * 1.1f
+        val gapToKey = 4.0f * context.resources.displayMetrics.density
         val extWidth = row0count * baseBounds.width
         val extHeight = when {
-            row1count > 0 -> baseBounds.height * 0.4f * 2.0f
-            else -> baseBounds.height * 0.4f
+            row1count > 0 -> elemHeight * 2.0f
+            else -> elemHeight
         }
         val x = ((key.visibleBounds.width - baseBounds.width) / 2.0f) + when {
             anchorLeft -> -anchorOffset * baseBounds.width
             anchorRight -> -extWidth + baseBounds.width + anchorOffset * baseBounds.width
             else -> 0.0f
         } + key.visibleBounds.left
-        val y = -baseBounds.height - when {
-            row1count > 0 -> (baseBounds.height * 0.4f).toInt()
-            else -> 0
-        } + key.visibleBounds.bottom
+        val y = key.visibleBounds.top - gapToKey - extHeight
         val extBounds = FlorisRect.new(
             left = x, top = y, right = x + extWidth, bottom = y + extHeight,
         )
@@ -302,6 +309,7 @@ class PopupUiController(
             anchorOffset = anchorOffset,
             row0count = row0count,
             row1count = row1count,
+            elemHeight = elemHeight,
         )
         activeElementIndex = initUiIndex
     }
@@ -329,8 +337,14 @@ class PopupUiController(
         val y = yEvent - key.visibleBounds.top
         val kX = x / baseBounds.width
 
-        // Check if out of boundary on y-axis
-        if (y < -baseBounds.height || y > 0.9f * baseBounds.height) {
+        // Check if out of boundary on y-axis.
+        // WordTaker (P0-3.4): the extended popup now floats above the key (detached bubble),
+        // so the upper boundary must reach past the popup rows plus a small slack, and the
+        // lower boundary allows ~1.5 key heights of downward drift before cancelling.
+        val keyHeight = key.visibleBounds.height
+        val rows = if (extRenderInfo.row1count > 0) 2 else 1
+        val upperLimit = -(extRenderInfo.elemHeight * rows + keyHeight * 0.5f)
+        if (y < upperLimit || y > 1.5f * keyHeight) {
             return false
         }
 
@@ -452,20 +466,55 @@ class PopupUiController(
             FlorisImeUi.Attr.Mode to evaluator.keyboard.mode.toString(),
             FlorisImeUi.Attr.ShiftState to evaluator.state.inputShiftState.toString(),
         )
-        baseRenderInfo?.let { renderInfo ->
+        // WordTaker (P0-3.3): preview bubble enter/exit motion — 90ms scale 0.85->1 + fade-in
+        // (FastOutSlowIn) anchored at the bubble's bottom center, 60ms fade-out. The last
+        // render info is kept in a plain holder so the exit animation has content to draw.
+        val baseVisible = baseRenderInfo != null
+        val lastBaseInfo = remember { arrayOfNulls<BaseRenderInfo>(1) }
+        if (baseRenderInfo != null) lastBaseInfo[0] = baseRenderInfo
+        val popupTransition = updateTransition(targetState = baseVisible, label = "keyPopup")
+        val popupAlpha by popupTransition.animateFloat(
+            transitionSpec = {
+                if (targetState) {
+                    tween(durationMillis = 90, easing = FastOutSlowInEasing)
+                } else {
+                    tween(durationMillis = 60)
+                }
+            },
+            label = "keyPopupAlpha",
+        ) { visible -> if (visible) 1.0f else 0.0f }
+        val popupScale by popupTransition.animateFloat(
+            transitionSpec = {
+                if (targetState) {
+                    tween(durationMillis = 90, easing = FastOutSlowInEasing)
+                } else {
+                    tween(durationMillis = 60)
+                }
+            },
+            label = "keyPopupScale",
+        ) { visible -> if (visible) 1.0f else 0.85f }
+        val renderInfoForFrame = baseRenderInfo ?: lastBaseInfo[0]
+        if ((baseVisible || popupAlpha > 0.01f) && renderInfoForFrame != null) {
             PopupBaseBox(
                 modifier = Modifier
-                    .requiredSize(renderInfo.bounds.size.toDpSize())
-                    .absoluteOffset { renderInfo.bounds.topLeft.toIntOffset() },
+                    .requiredSize(renderInfoForFrame.bounds.size.toDpSize())
+                    .absoluteOffset { renderInfoForFrame.bounds.topLeft.toIntOffset() }
+                    .graphicsLayer {
+                        alpha = popupAlpha
+                        scaleX = popupScale
+                        scaleY = popupScale
+                        transformOrigin = TransformOrigin(0.5f, 1.0f)
+                    },
                 attributes = attributes,
-                key = renderInfo.key,
-                shouldIndicateExtendedPopups = renderInfo.shouldIndicateExtendedPopups && extRenderInfo == null,
+                key = renderInfoForFrame.key,
+                shouldIndicateExtendedPopups =
+                    renderInfoForFrame.shouldIndicateExtendedPopups && extRenderInfo == null,
             )
         }
         extRenderInfo?.let { renderInfo ->
             val baseBounds = renderInfo.baseBounds
             val elemWidth = baseBounds.width
-            val elemHeight = baseBounds.height * 0.4f
+            val elemHeight = renderInfo.elemHeight
             PopupExtBox(
                 modifier = Modifier
                     .requiredSize(renderInfo.bounds.size.toDpSize())
@@ -499,6 +548,7 @@ class PopupUiController(
         val anchorOffset: Int,
         val row0count: Int,
         val row1count: Int,
+        val elemHeight: Float,
     )
 
     data class Element(

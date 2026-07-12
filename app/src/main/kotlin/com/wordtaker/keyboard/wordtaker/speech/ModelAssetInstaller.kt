@@ -5,14 +5,19 @@ import android.util.Log
 import java.io.File
 
 /**
- * Installs the SenseVoice ASR model bundled inside the APK (`assets/models/sensevoice/`)
- * into internal storage on first launch, so the keyboard works fully offline with no
- * network download. The two files land in the same place [ModelDownloader] expects:
+ * Installs the streaming Zipformer ASR model bundled inside the APK
+ * (`assets/models/zipformer-zh/`) into internal storage on first launch, so the
+ * keyboard works fully offline with no network download. The four files land in
+ * the same place [ModelDownloader] expects:
  *   - tokens.txt        -> [ModelDownloader.tokensFile]
- *   - model.int8.onnx   -> [ModelDownloader.modelFile]
+ *   - encoder.int8.onnx -> [ModelDownloader.encoderFile]
+ *   - decoder.int8.onnx -> [ModelDownloader.decoderFile]
+ *   - joiner.int8.onnx  -> [ModelDownloader.joinerFile]
  *
- * Idempotent: a `.installed_v1` marker inside the model dir, combined with
+ * Idempotent: a `.installed_v2` marker inside the model dir, combined with
  * [ModelDownloader.isDownloaded], short-circuits any recopy on later launches.
+ * (v2 = the streaming Zipformer set; the v1 SenseVoice install dir is deleted to
+ * reclaim its ~228MB on upgraded devices.)
  *
  * Fully silent and crash-proof: every failure is logged and swallowed — this NEVER
  * throws and NEVER shows UI. Run off the main thread.
@@ -21,9 +26,12 @@ object ModelAssetInstaller {
 
     private const val TAG = "ModelAssetInstaller"
 
-    private const val ASSET_DIR = "models/sensevoice"
-    private const val MARKER_NAME = ".installed_v1"
+    private const val ASSET_DIR = "models/zipformer-zh"
+    private const val MARKER_NAME = ".installed_v2"
     private const val COPY_BUFFER_BYTES = 8 * 1024
+
+    // Legacy SenseVoice install location (pre-streaming builds) — deleted on sight.
+    private const val LEGACY_DIR_NAME = "sensevoice"
 
     /**
      * Ensures the bundled model is present in internal storage. No-ops when already
@@ -31,6 +39,8 @@ object ModelAssetInstaller {
      */
     fun ensureInstalled(context: Context) {
         try {
+            cleanupLegacyModel(context)
+
             val dir = ModelDownloader.modelDir(context)
             val marker = File(dir, MARKER_NAME)
 
@@ -44,9 +54,11 @@ object ModelAssetInstaller {
             }
 
             copyAsset(context, ModelDownloader.TOKENS_NAME, ModelDownloader.tokensFile(context))
-            copyAsset(context, ModelDownloader.MODEL_NAME, ModelDownloader.modelFile(context))
+            copyAsset(context, ModelDownloader.DECODER_NAME, ModelDownloader.decoderFile(context))
+            copyAsset(context, ModelDownloader.JOINER_NAME, ModelDownloader.joinerFile(context))
+            copyAsset(context, ModelDownloader.ENCODER_NAME, ModelDownloader.encoderFile(context))
 
-            // Both files copied successfully -> drop the marker.
+            // All files copied successfully -> drop the marker.
             marker.createNewFile()
             Log.i(TAG, "模型已从 assets 安装到 ${dir.absolutePath}")
         } catch (t: Throwable) {
@@ -54,8 +66,20 @@ object ModelAssetInstaller {
         }
     }
 
+    /** Frees the old ~228MB SenseVoice model dir left by pre-streaming builds. */
+    private fun cleanupLegacyModel(context: Context) {
+        try {
+            val legacy = File(context.filesDir, LEGACY_DIR_NAME)
+            if (legacy.exists() && legacy.deleteRecursively()) {
+                Log.i(TAG, "已清理旧 SenseVoice 模型目录")
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "legacy cleanup failed", t)
+        }
+    }
+
     /**
-     * Streams `assets/models/sensevoice/<name>` to a sibling `.part` temp file, then
+     * Streams `assets/models/zipformer-zh/<name>` to a sibling `.part` temp file, then
      * atomically renames it onto [dest]. Throws on failure (caught by [ensureInstalled]).
      */
     private fun copyAsset(context: Context, name: String, dest: File) {

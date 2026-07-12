@@ -292,6 +292,9 @@ dependencies {
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotlin.test.junit5)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
+    // Real org.json for JVM unit tests (the mockable android.jar only has stubs).
+    testImplementation("org.json:json:20240303")
     testImplementation(libs.turbine)
     androidTestImplementation(libs.androidx.test.ext)
     androidTestImplementation(libs.androidx.test.espresso.core)

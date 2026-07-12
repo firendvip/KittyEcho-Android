@@ -4,6 +4,111 @@ All notable changes to WordTaker (FlorisBoard fork) are documented here.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/) and
 [Semantic Versioning](https://semver.org/).
 
+## [0.37.0] - 2026-07-13
+
+首个真正公开发布的 Android 版本（此前仅本地调试包，从未上架）。
+
+### Added
+- **滑行输入（glide typing）**：英文 QWERTY 支持滑动连写成词；中文全拼支持滑行（本地常用词表，滑出拼音进 composing 后由原生拼音引擎解码汉字候选）。
+- **手写笔画输入**：键盘设置 → 键盘管理 → 手写输入，手写笔迹实时识别候选并上屏。
+- **云词库联想**：打拼音时联网补充更多候选词（免费不计费；仅上传拼音编码、不上传输入内容；隐私/密码场景不发起；离线或超时静默降级为纯本地候选）。设置首页可开关。
+
+### Changed
+- **键盘样式对齐参考图**：去除全拼字母键上的数字/符号角标（键面更干净，可在设置恢复）；键盘整体高度上调约 7%（`ImeWindowConstraints` phone-portrait 0.26→0.278）；设置面板与键盘等高、切换不跳高。
+
+### Fixed
+- `BackendClient.dictSuggest` 现尊重统一响应 envelope 的 `success` 字段（HTTP 200 但 `success=false` 亦静默降级返空，不误采候选）。
+
+### Notes
+- 附带首次上架材料（商店文案/隐私政策/权限说明/上架清单，`docs/release/store-listing/`）与云词库后端契约（`docs/cloud-dictionary/`）。
+- 新增 19 项单元测试（云词库联想 dictSuggest/Augmenter），真机验证滑行/手写/云联想端到端可用。
+
+## [0.35.5] - 2026-07-02
+
+### Changed
+- 键盘视觉微调（模拟器验证）：
+  - 键盘底部与屏幕最底之间留出约 14dp 悬浮空隙(`ImeWindow` FIXED_BOTTOM_GAP，计入 inset 不遮挡应用)。
+  - 顶栏图标白色圆底缩小到紧贴图标(圆钮 34→27dp、图标 22→21dp)。
+  - 中/英切换键改为同时显示「中/英」两字，当前模式那个高亮、另一个灰显(`TextKeyboardLayout` 对 LANGUAGE_SWITCH 用 AnnotatedString 双色)。
+  - 「点击说话」条缩短为包裹内容宽度并靠左紧贴设置图标，右侧留空(`CatKeyboardLayout` TalkPill wrapContentWidth + Spacer weight)。
+
+## [0.35.4] - 2026-07-01
+
+### Changed
+- 视觉对齐参考图（模拟器验证）：
+  - 符号/数字键盘不再显示「点击说话」工具栏——仅字母键盘(CHARACTERS)显示该栏；符号/数字键盘顶部直接是可滑动符号条，键盘整体变矮一行(`CatKeyboardLayout` 按 keyboardMode 判定)。
+  - 字母键盘空格键图标由麦克风改为声波条(`ic_wt_wave.xml`)。
+  - 设置图标四瓣花矢量重绘得更干净(四片圆润花瓣+花心)。
+
+## [0.35.3] - 2026-07-01
+
+### Changed
+- 键盘对齐 3 张参考图（模拟器逐迭代验证）：
+  - 主键盘：移除字母键上的数字/符号提示（改回干净字母，`hintedSymbolsEnabled=false` 且不套用 pinyin 提示）；底部第2键改为中文逗号「，」(长按「。」)；收起 chevron 缩到左下角落不再压住「123」键。
+  - 符号键盘(点"123")：新增顶部可滑动符号条 `# % & + …… 《 》「」×`(`QuickSymbolStrip`)；键行 数字/`- / : ~ ( ) … @ " "`/`。 ， 、 ？ ！ .`；标点行左键「符号」；底部功能行 `← / 12·34 / 空格 / 换行`；空格去掉麦克风图标；`12·34` 双行显示(`key[code=-204]` text-max-lines:2)。
+  - 数字键盘(点"12·34")：计算器式九宫格——左列 `% + - ←`、`1-9`、`符号 0 .`、右列 `⌫ 空格 换行`(高块)；移除多余 `*`。
+  - `?123` 键标签改为 `123`。
+
+## [0.35.2] - 2026-07-01
+
+### Changed
+- 顶栏对齐参考图2：设置按钮图标由田字格改为四瓣花(`ic_wt_grid.xml`)；工具栏圆钮由 28dp/17dp 放大到 34dp/22dp（设置键与右侧收起键同步变大更醒目）。
+- 底部符号切换键标签 `?123` → `123`（`strings_dont_translate.xml`）。
+- 符号键盘(点"123")对齐参考图3：布局改为「数字行 1-0 / 符号行 `- / : ~ ( ) … @ " "` / 中文标点行 `。 ， 、 ？ ！ .`」(`symbols/cjk.json`)。
+- 待办(需真机确认后做)：图4 九宫格数字键盘、符号键盘顶部可滑动符号条、底部 ←/12·34 模式键。
+
+## [0.35.1] - 2026-07-01
+
+### Changed
+- 全拼键盘第三排键位提示符号对齐参考图：Z X C V B N M 由 `@ # ¥ & * ' "` 改为 `@ . # \` ? ! …`
+  （数据在 `LayoutManager.PINYIN_QWERTY_KEY_HINTS`；长按对应键即输入该符号）。
+
+## [0.35.0] - 2026-07-01
+
+### Added
+- 键盘顶栏 1:1 微信化 (需求1): 待机顶栏改为 [田字格图标] + [🎤点击说话 药丸] + [收起箭头]，
+  撤掉顶栏小猫头像与睡猫；小猫仅在录音界面出现。田字格→打开设置面板；点击说话药丸→进入录音
+  并开始录音；收起→隐藏键盘。新增 `ic_wt_grid.xml`。候选整行 (56dp 固定) 与录音放大路径保持不变。
+- 录音界面「取消」按钮 (需求9): 录音/识别/润色任意阶段均可点「取消」→ `VoiceViewModel.cancel()`
+  停止录音、取消进行中的识别/润色协程，不上屏、不写历史，回到空闲。
+- 录音状态文案 (需求10): 忙碌屏按阶段显示「正在倾听…/正在识别…/正在AI润色中…」。
+
+### Changed
+- 桌面启动图标猫头缩小 (需求2): `ic_app_icon_foreground` 猫组 scale 0.88→0.62 (monochrome 同步)，
+  落入自适应安全区、留白与主页头像同比例，不再被裁切/占满。
+- 隐藏麦克风授权步骤的「暂不授权，稍后再说」按钮 (需求3)，仅保留授权主按钮，流程仍可完成。
+- 历史记录移到设置最上方 (需求5): 顺序改为 Header→历史记录→AI角色→提示音→键盘管理。
+- 历史页视觉统一微信风 (需求4): 浅 `#F2F3F5`/白卡、深 `#1C1D1F`/`#2A2B2E`、绿 `#07C160`，
+  层级清晰 (润色加粗、原文次要、时间戳弱化)，新增共享 `WeChatPalette`。
+- 提示音简化 (需求8): 移除「喵/提示音」风格选择器，仅保留开关；`ToneController` 恒播「喵」并
+  在 init 预加载修复首次无声。
+- 小猫出场/离场缩放 (需求6): 离场 settle 由固定 1.0 改为 1.0→0.32 渐隐，呈现「走远」，与入场对称。
+- 音符位置 (需求7): 移到运动方向斜上方，不再覆盖头部 (`NOTE_FRONT_BIAS` 13、`FX_DIAG_UP_Y` -8、
+  单向散开)；灯泡不变。
+
+### Fixed
+- 卡顿/上下黑屏 (需求11): `ImeWindow` 增加最小高度避免首帧塌陷；`ImeWindowController.onComputeInsets`
+  首帧 insets 为空时改为兜底上报 (不再直接 return)，消除黑边；`CatKeyboardLayout` 键盘高度记忆化。
+- 一段时间后彻底卡死 (需求12): `SenseVoiceController` 由 `synchronized` 改 `ReentrantLock`，
+  `destroy()` 后台执行且 `tryLock(2s)` 有界，杜绝挂死的原生转写拖死整个输入法；
+  `RealSpeechEngine.awaitReady` 10s→3s 且不在主线程；ASR 初始化提前到 `FlorisApplication.onCreate`
+  后台预热 (全程 try/catch)。
+
+## [0.34.0] - 2026-07-01
+
+### Added
+- 全拼 QWERTY 微信/iOS 风按键提示 (需求1): 每个字母键右上角常驻显示数字/符号小提示
+  (第一行 q–p → 1234567890；二三行字母 → 符号)，长按该键即可输入对应数字/符号 (并展开标准
+  备选弹窗)。提示为数据驱动 (`LayoutManager.PINYIN_QWERTY_KEY_HINTS`)，改值即改显示与长按输出。
+  仅作用于 `pinyin_qwerty` 布局，其余布局走原符号布局提示逻辑。
+- 键盘左下角「收起键盘」下箭头 (需求1): `TextKeyboardLayout` 在字符模式左下角叠加一个极简
+  chevron (复用 `ic_wt_collapse` 图标与 `FlorisImeService.hideUi()`)，点按即收起键盘窗口；
+  采用叠层实现，不改动功能行其余按键的位置与尺寸。
+
+### Changed
+- 开启字母键符号提示 (`hintedSymbolsEnabled` 默认 true，模式 `HINT_PRIORITY`)，使提示常驻显示
+  且长按优先提交提示字符。
+
 ## [0.33.1] - 2026-07-01
 
 ### Fixed

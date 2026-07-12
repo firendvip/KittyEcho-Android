@@ -619,20 +619,6 @@ private fun MicPermissionStep(
                 }
             },
         )
-
-        Spacer(Modifier.height(14.dp))
-        Button(
-            onClick = onFinish,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFFE5E7E9),
-                contentColor = Color(0xFF666666),
-            ),
-        ) {
-            Text(text = "暂不授权，稍后再说", fontSize = 15.sp)
-        }
     }
 }
 

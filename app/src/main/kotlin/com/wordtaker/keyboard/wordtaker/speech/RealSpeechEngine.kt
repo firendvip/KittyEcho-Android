@@ -4,33 +4,97 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.util.Log
 import androidx.core.content.ContextCompat
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
 /**
- * Real on-device speech engine: continuous PCM capture ([PcmRecorder]) decoded by the
- * offline SenseVoice ASR ([SenseVoiceController]). Fully on-device, no network.
+ * Real on-device STREAMING speech engine: continuous PCM capture ([PcmRecorder])
+ * decoded live by the streaming Zipformer transducer ([ZipformerController]).
+ * Fully on-device, no network.
+ *
+ * Pipeline: the capture thread pushes float chunks into [queue]; a dedicated decode
+ * worker drains it into the active Zipformer session, publishing live partials into
+ * [partials] and firing [endpoints] once when trailing silence is detected. [stop]
+ * flushes the session and returns the final transcript.
+ *
+ * Cold-start fallback: if the recognizer wasn't ready when [start] ran (first-use
+ * warm-up still loading), the recorder still captures; [stop] then waits briefly for
+ * readiness and batch-decodes the accumulated buffer through a one-shot session.
  *
  * Preconditions surfaced as typed exceptions so the UI can react:
  *   - [MicPermissionRequiredException] when RECORD_AUDIO is missing (IME must route
  *     the user through a permission Activity, since a service can't request it).
- *   - [ModelNotReadyException] when the ~228MB model isn't downloaded or fails to load.
+ *   - [ModelNotReadyException] when the model isn't installed or fails to load.
  */
 class RealSpeechEngine(private val context: Context) : SpeechEngine {
 
     private val recorder = PcmRecorder()
-    private val sense = SenseVoiceController(context)
+    private val zip = ZipformerController(context)
+
+    private val _partials = MutableStateFlow("")
+    override val partials: StateFlow<String> = _partials.asStateFlow()
+
+    private val _endpoints = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    override val endpoints: SharedFlow<Unit> = _endpoints.asSharedFlow()
+
+    // Chunk hand-off between the capture thread and the decode worker.
+    private val queue = LinkedBlockingQueue<FloatArray>()
+
+    @Volatile
+    private var workerRunning = false
+    // Set by stop(): the worker drains whatever is left in the queue, then exits.
+    @Volatile
+    private var draining = false
+    private var worker: Thread? = null
+
+    // Whether the CURRENT recording opened a live streaming session at start().
+    @Volatile
+    private var sessionOpened = false
+    private val endpointFired = AtomicBoolean(false)
+
+    // P2-205 自愈：模型安装/预热可能在进程存活期间被再次需要（模型目录被清掉等），
+    // 不能只在构造时跑一次。CAS 防并发重入；跑完复位，失败后下次触发可再试。
+    private val modelInstallRunning = AtomicBoolean(false)
 
     init {
-        // Install the bundled model (assets -> filesDir) and warm up the recognizer on a
-        // background thread. ensureInstalled() copies a ~228MB file and must never run on
-        // the main thread; prepare()'s own heavy ONNX load is already off-thread.
+        // Install the bundled model (assets -> filesDir) and warm up THIS instance's
+        // recognizer on a background thread. ensureInstalled() copies ~72MB and must
+        // never run on the main thread; prepare()'s own heavy ONNX load is already
+        // off-thread. FlorisApplication.onCreate() triggers construction of this
+        // singleton early (via AppGraph.speechEngine) so this priming happens well
+        // before first voice use rather than lazily blocking it (BUG #12).
+        ensureModelAsync()
+    }
+
+    /**
+     * Kicks off (at most one concurrent) background install + warm-up of the bundled
+     * model. Re-invoked whenever a voice attempt finds the model missing (P2-205), so
+     * the engine heals itself within the same process instead of requiring a restart.
+     */
+    private fun ensureModelAsync() {
+        if (!modelInstallRunning.compareAndSet(false, true)) return
         Thread {
-            ModelAssetInstaller.ensureInstalled(context)
-            if (ModelDownloader.isDownloaded(context)) sense.prepare()
-        }.apply { isDaemon = true }.start()
+            try {
+                ModelAssetInstaller.ensureInstalled(context)
+                if (ModelDownloader.isDownloaded(context)) zip.prepare()
+            } catch (t: Throwable) {
+                Log.e(TAG, "warm-up failed", t)
+            } finally {
+                modelInstallRunning.set(false)
+            }
+        }.apply { isDaemon = true; name = "AsrWarmUp" }.start()
     }
 
     private fun hasMicPermission(): Boolean =
@@ -38,46 +102,177 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
             PackageManager.PERMISSION_GRANTED
 
     @SuppressLint("MissingPermission") // guarded by hasMicPermission()
-    override fun start() {
+    override fun start(suppressLeadingMs: Long) {
         if (!hasMicPermission()) return
-        if (!ModelDownloader.isDownloaded(context)) return
-        recorder.start()
+        if (!ModelDownloader.isDownloaded(context)) {
+            ensureModelAsync() // P2-205: 自动重装，进程内自愈
+            return
+        }
+        _partials.value = ""
+        endpointFired.set(false)
+        queue.clear()
+
+        // Open the live session up front when the recognizer is ready; otherwise the
+        // recorder still captures and stop() batch-decodes as a fallback.
+        sessionOpened = zip.isReady && zip.startSession()
+        if (sessionOpened) startWorker()
+
+        val started = recorder.start(
+            onChunk = if (sessionOpened) { chunk -> queue.offer(chunk) } else null,
+            // 起始提示音护栏：喵叫在开麦后立即播放，会被手机自己的麦克风录进来，
+            // 解码成垃圾字且其后停顿会提前触发 endpoint —— 按调用方给的窗口把
+            // 录音开头这段完全丢弃（不进队列、不进兜底缓冲）。
+            skipLeadingSamples = (suppressLeadingMs * SAMPLE_RATE / 1000L).toInt(),
+        )
+        if (!started && sessionOpened) {
+            // Mic failed to open: tear the session back down so nothing leaks.
+            stopWorker()
+            zip.cancelSession()
+            sessionOpened = false
+        }
     }
 
     override suspend fun stop(): String = withContext(Dispatchers.IO) {
         if (!hasMicPermission()) {
             recorder.cancel()
+            abortSession()
             throw MicPermissionRequiredException()
         }
         if (!ModelDownloader.isDownloaded(context)) {
             recorder.cancel()
+            abortSession()
+            ensureModelAsync() // P2-205: 抛错前先触发后台重装，下次尝试即可用
             throw ModelNotReadyException()
         }
         val samples = recorder.stop()
-        if (samples.isEmpty()) return@withContext ""
-        if (!sense.isReady && !awaitReady()) {
-            throw ModelNotReadyException()
+        val text = if (sessionOpened) {
+            // Live streaming path: let the worker drain the tail of the queue, then
+            // flush the session for the final result.
+            drainWorker()
+            sessionOpened = false
+            zip.finishSession()
+        } else {
+            // Cold-start fallback: batch-decode the accumulated buffer.
+            if (samples.isEmpty()) return@withContext ""
+            if (!zip.isReady && !awaitReady()) throw ModelNotReadyException()
+            if (!zip.startSession()) throw ModelNotReadyException()
+            zip.feed(samples)
+            zip.finishSession()
         }
-        sense.transcribe(samples).trim()
+        _partials.value = ""
+        text.trim()
     }
 
     override fun cancel() {
+        // Called from main-thread IME lifecycle callbacks: everything here must be
+        // non-blocking. recorder.cancel() never blocks; session teardown (which takes
+        // the native lock) is pushed to a throwaway background thread.
         recorder.cancel()
+        abortSession()
     }
 
-    /** Triggers a prepare and polls readiness up to ~10s. */
+    /** Non-blocking teardown of the worker + any active session. */
+    private fun abortSession() {
+        draining = false
+        workerRunning = false
+        worker = null
+        queue.clear()
+        _partials.value = ""
+        if (sessionOpened) {
+            sessionOpened = false
+            Thread {
+                try {
+                    zip.cancelSession()
+                } catch (t: Throwable) {
+                    Log.e(TAG, "session cancel failed", t)
+                }
+            }.apply { isDaemon = true; name = "AsrSessionCancel" }.start()
+        }
+    }
+
+    /** Launches the decode worker that streams queued chunks into the session. */
+    private fun startWorker() {
+        draining = false
+        workerRunning = true
+        worker = Thread {
+            var lastPartial = ""
+            while (workerRunning) {
+                val chunk = try {
+                    queue.poll(QUEUE_POLL_MS, TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                if (chunk == null) {
+                    if (draining) break // capture ended and queue is empty -> done
+                    continue
+                }
+                val partial = zip.feed(chunk)
+                if (partial.text != lastPartial) {
+                    if (lastPartial.isEmpty() && partial.text.isNotEmpty()) {
+                        // QA instrumentation: timestamp of the first partial of this session
+                        // (used for first-character latency measurement via logcat).
+                        Log.i(TAG, "first partial: ${partial.text}")
+                    }
+                    lastPartial = partial.text
+                    _partials.value = partial.text
+                }
+                if (partial.isEndpoint && partial.text.isNotBlank() &&
+                    endpointFired.compareAndSet(false, true)
+                ) {
+                    // Trailing silence after speech: tell the UI to finish this
+                    // recording. The engine keeps decoding until stop() arrives.
+                    _endpoints.tryEmit(Unit)
+                }
+            }
+        }.apply { isDaemon = true; name = "AsrDecodeWorker" }
+        worker?.start()
+    }
+
+    /** Stops the worker immediately, discarding anything still queued. */
+    private fun stopWorker() {
+        draining = false
+        workerRunning = false
+        worker?.interrupt()
+        worker = null
+        queue.clear()
+    }
+
+    /**
+     * Lets the worker consume the remaining queued audio, then waits (bounded) for it
+     * to exit so finishSession() sees the complete stream. Called from Dispatchers.IO.
+     */
+    private fun drainWorker() {
+        draining = true
+        try {
+            worker?.join(DRAIN_JOIN_MS)
+        } catch (_: InterruptedException) {
+        }
+        workerRunning = false
+        worker = null
+    }
+
+    /**
+     * Triggers a prepare and polls readiness up to ~3s. Only ever invoked from [stop],
+     * which runs on Dispatchers.IO — never the main thread. The cap is short so a slow /
+     * failed model load surfaces a ModelNotReadyException quickly instead of hanging the
+     * voice flow (BUG #12: "after a while, completely freezes").
+     */
     private suspend fun awaitReady(): Boolean {
-        sense.prepare()
+        runCatching { zip.prepare() }
         var waited = 0L
-        while (!sense.isReady && waited < READY_TIMEOUT_MS) {
+        while (!zip.isReady && waited < READY_TIMEOUT_MS) {
             delay(READY_POLL_MS)
             waited += READY_POLL_MS
         }
-        return sense.isReady
+        return zip.isReady
     }
 
     private companion object {
+        const val TAG = "RealSpeechEngine"
+        const val SAMPLE_RATE = 16000
         const val READY_POLL_MS = 100L
-        const val READY_TIMEOUT_MS = 10_000L
+        const val READY_TIMEOUT_MS = 3_000L
+        const val QUEUE_POLL_MS = 50L
+        const val DRAIN_JOIN_MS = 3_000L
     }
 }

@@ -1,0 +1,157 @@
+package com.wordtaker.keyboard.wordtaker.backend
+
+import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import org.json.JSONObject
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+/**
+ * JWT 与账号摘要的安全存储 —— 对齐 Mac 端 tokenStore.js 的角色。
+ *
+ * accessToken 用 Android Keystore（AES/GCM，密钥不出安全硬件）加密后落
+ * SharedPreferences；账号摘要（昵称/邀请码等非机密）明文 JSON 存储。
+ * Keystore 不可用（极老设备/异常）时该次写入放弃加密并降级明文键，读取两者兼容。
+ */
+class TokenStore(context: Context) {
+
+    private val prefs = context.applicationContext
+        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    @Volatile
+    private var cachedToken: String? = null
+    @Volatile
+    private var tokenLoaded = false
+
+    /** 仅返回 accessToken（无则 null）。 */
+    fun accessToken(): String? {
+        if (tokenLoaded) return cachedToken
+        synchronized(this) {
+            if (tokenLoaded) return cachedToken
+            cachedToken = readToken()
+            tokenLoaded = true
+            return cachedToken
+        }
+    }
+
+    fun isLoggedIn(): Boolean = !accessToken().isNullOrBlank()
+
+    /** 写入登录态：token 加密落盘，account 摘要明文 JSON。 */
+    fun set(accessToken: String, account: AccountInfo?) {
+        require(accessToken.isNotBlank()) { "TokenStore.set 需要 accessToken" }
+        synchronized(this) {
+            val editor = prefs.edit()
+            val encrypted = encrypt(accessToken)
+            if (encrypted != null) {
+                editor.putString(KEY_TOKEN_ENC, encrypted).remove(KEY_TOKEN_PLAIN)
+            } else {
+                // Keystore 不可用的兜底：明文降级（好过丢登录态），读取时两者兼容。
+                editor.putString(KEY_TOKEN_PLAIN, accessToken).remove(KEY_TOKEN_ENC)
+            }
+            editor.putString(KEY_ACCOUNT, account?.toJson()?.toString())
+            editor.apply()
+            cachedToken = accessToken
+            tokenLoaded = true
+        }
+    }
+
+    /** 读取账号摘要（无则 null）。 */
+    fun account(): AccountInfo? = runCatching {
+        prefs.getString(KEY_ACCOUNT, null)?.let { AccountInfoJson.from(JSONObject(it)) }
+    }.getOrNull()
+
+    /** 更新账号摘要（token 不变）。 */
+    fun updateAccount(account: AccountInfo?) {
+        prefs.edit().putString(KEY_ACCOUNT, account?.toJson()?.toString()).apply()
+    }
+
+    /** 退出登录 / token 失效时清空。 */
+    fun clear() {
+        synchronized(this) {
+            prefs.edit()
+                .remove(KEY_TOKEN_ENC)
+                .remove(KEY_TOKEN_PLAIN)
+                .remove(KEY_ACCOUNT)
+                .apply()
+            cachedToken = null
+            tokenLoaded = true
+        }
+    }
+
+    // —— 加解密（Android Keystore AES/GCM）——
+
+    private fun readToken(): String? {
+        prefs.getString(KEY_TOKEN_ENC, null)?.let { enc ->
+            decrypt(enc)?.let { return it }
+        }
+        return prefs.getString(KEY_TOKEN_PLAIN, null)
+    }
+
+    private fun encrypt(plain: String): String? = runCatching {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, obtainKey())
+        val ct = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+        Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
+            Base64.encodeToString(ct, Base64.NO_WRAP)
+    }.getOrNull()
+
+    private fun decrypt(stored: String): String? = runCatching {
+        val parts = stored.split(":", limit = 2)
+        if (parts.size != 2) return null
+        val iv = Base64.decode(parts[0], Base64.NO_WRAP)
+        val ct = Base64.decode(parts[1], Base64.NO_WRAP)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, obtainKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
+        String(cipher.doFinal(ct), Charsets.UTF_8)
+    }.getOrNull()
+
+    private fun obtainKey(): SecretKey {
+        val ks = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+        (ks.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .build(),
+        )
+        return generator.generateKey()
+    }
+
+    private companion object {
+        const val PREFS_NAME = "wt_backend_auth"
+        const val KEY_TOKEN_ENC = "token_enc"
+        const val KEY_TOKEN_PLAIN = "token_plain"
+        const val KEY_ACCOUNT = "account_json"
+        const val KEYSTORE = "AndroidKeyStore"
+        const val KEY_ALIAS = "wt_backend_token"
+        const val TRANSFORMATION = "AES/GCM/NoPadding"
+        const val GCM_TAG_BITS = 128
+    }
+}
+
+/** AccountInfo <-> JSON（TokenStore 持久化用）。 */
+private fun AccountInfo.toJson(): JSONObject = JSONObject()
+    .putOpt("userId", userId)
+    .putOpt("nickname", nickname)
+    .putOpt("inviteCode", inviteCode)
+    .putOpt("email", email)
+    .putOpt("phone", phone)
+
+internal object AccountInfoJson {
+    fun from(json: JSONObject): AccountInfo = AccountInfo(
+        userId = json.optString("userId").takeIf { it.isNotBlank() },
+        nickname = json.optString("nickname").takeIf { it.isNotBlank() },
+        inviteCode = json.optString("inviteCode").takeIf { it.isNotBlank() },
+        email = json.optString("email").takeIf { it.isNotBlank() },
+        phone = json.optString("phone").takeIf { it.isNotBlank() },
+    )
+}

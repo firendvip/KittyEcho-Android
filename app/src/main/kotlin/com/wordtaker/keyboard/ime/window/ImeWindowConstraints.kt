@@ -136,7 +136,8 @@ sealed class ImeWindowConstraints(rootInsets: ImeInsets.Root) {
                 ImeFormFactor.Type.TABLET_LANDSCAPE -> 0.35f
                 ImeFormFactor.Type.TABLET_PORTRAIT -> 0.22f
                 ImeFormFactor.Type.PHONE_LANDSCAPE -> 0.47f
-                ImeFormFactor.Type.PHONE_PORTRAIT -> 0.26f
+                // WordTaker: matched to the A55 iOS reference — rows ~7% taller than the old 0.26.
+                ImeFormFactor.Type.PHONE_PORTRAIT -> 0.278f
             }
             (baselineScreen.height * factor).coerceIn(minKeyboardHeight, maxKeyboardHeight)
         }
@@ -148,7 +149,9 @@ sealed class ImeWindowConstraints(rootInsets: ImeInsets.Root) {
                 ImeFormFactor.Type.TABLET_LANDSCAPE -> 2.dp
                 ImeFormFactor.Type.TABLET_PORTRAIT -> 5.dp
                 ImeFormFactor.Type.PHONE_LANDSCAPE -> 2.dp
-                ImeFormFactor.Type.PHONE_PORTRAIT -> 2.dp
+                // WordTaker (P1-6): WeChat-like gap rhythm — 6dp horizontal / 9dp vertical
+                // gaps (gap = 2 x per-side margin): wider keycaps, tighter rows.
+                ImeFormFactor.Type.PHONE_PORTRAIT -> 3.dp
             }
         }
         override val defKeyMarginV by calculation {
@@ -158,7 +161,8 @@ sealed class ImeWindowConstraints(rootInsets: ImeInsets.Root) {
                 ImeFormFactor.Type.TABLET_LANDSCAPE -> 5.dp
                 ImeFormFactor.Type.TABLET_PORTRAIT -> 5.dp
                 ImeFormFactor.Type.PHONE_LANDSCAPE -> 5.dp
-                ImeFormFactor.Type.PHONE_PORTRAIT -> 5.dp
+                // WordTaker (P1-6): see defKeyMarginH.
+                ImeFormFactor.Type.PHONE_PORTRAIT -> 4.5.dp
             }
         }
 

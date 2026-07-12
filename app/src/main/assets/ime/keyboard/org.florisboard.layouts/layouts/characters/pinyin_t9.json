@@ -1,17 +1,23 @@
 [
   [
+    { "code": -202, "label": "view_symbols", "type": "system_gui" },
+    { "$": "auto_text_key", "code":   49, "label": "1" },
     { "$": "auto_text_key", "code":   50, "label": "2 ABC" },
     { "$": "auto_text_key", "code":   51, "label": "3 DEF" },
-    { "$": "auto_text_key", "code":   52, "label": "4 GHI" }
+    { "code":   -7, "label": "delete", "type": "enter_editing" }
   ],
   [
+    { "$": "auto_text_key", "code": 65292, "label": "，" },
+    { "$": "auto_text_key", "code":   52, "label": "4 GHI" },
     { "$": "auto_text_key", "code":   53, "label": "5 JKL" },
     { "$": "auto_text_key", "code":   54, "label": "6 MNO" },
-    { "$": "auto_text_key", "code":   55, "label": "7 PQRS" }
+    { "$": "auto_text_key", "code": 12290, "label": "。" }
   ],
   [
+    { "$": "auto_text_key", "code": 65311, "label": "？" },
+    { "$": "auto_text_key", "code":   55, "label": "7 PQRS" },
     { "$": "auto_text_key", "code":   56, "label": "8 TUV" },
     { "$": "auto_text_key", "code":   57, "label": "9 WXYZ" },
-    { "$": "auto_text_key", "code":   49, "label": "1" }
+    { "$": "auto_text_key", "code": 65281, "label": "！" }
   ]
 ]

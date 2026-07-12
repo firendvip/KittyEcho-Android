@@ -15,6 +15,7 @@
 
     "--drag-marker": "rgb(255,0,0)",
     "--spacer-color": "dynamic-dark-color(scrim)",
+    "--key-edge-color": "#00000080",
 
     "--one-hand-background": "dynamic-dark-color(inversePrimary)",
     "--one-hand-foreground": "dynamic-dark-color(scrim)",
@@ -71,9 +72,14 @@
     "background": "var(--surface)",
     "foreground": "var(--on-background)",
     "font-size": "22sp",
+    "font-weight": "500",
     "shape": "var(--shape)",
-    "shadow-elevation": "2dp",
+    "shadow-elevation": "1.5dp",
+    "shadow-color": "#00000066",
     "text-max-lines": "1"
+  },
+  "key-edge": {
+    "background": "var(--key-edge-color)"
   },
   "key:pressed": {
     "background": "var(--surface-variant)",
@@ -91,13 +97,18 @@
     "background": "var(--surface)",
     "foreground": "var(--on-surface-variant)",
     "font-size": "12sp",
+    "font-weight": "normal",
     "text-overflow": "ellipsis"
   },
   "key[code=-201,-202,-203]": {
-    "font-size": "18sp"
+    "font-size": "18sp",
+    "font-weight": "500"
   },
   "key[code=-204,-205]": {
     "font-size": "12sp"
+  },
+  "key[code=-204]": {
+    "text-max-lines": "2"
   },
   "key[code=-205]": {
     "text-max-lines": "2"
@@ -113,15 +124,36 @@
     "padding": "0dp 1dp 1dp 0dp",
     "text-max-lines": "1"
   },
+  "key-t9-digit": {
+    "background": "transparent",
+    "foreground": "var(--on-surface-variant)",
+    "font-size": "11sp",
+    "font-weight": "500",
+    "padding": "4dp 2dp 0dp 0dp",
+    "text-max-lines": "1"
+  },
+  "key-t9-letters": {
+    "background": "transparent",
+    "foreground": "var(--on-surface)",
+    "font-size": "20sp",
+    "font-weight": "500",
+    "text-max-lines": "1"
+  },
   "key-popup-box": {
     "background": "var(--popup-surface)",
     "foreground": "var(--on-surface)",
-    "font-size": "22sp",
-    "shape": "var(--shape)",
-    "shadow-elevation": "2dp"
+    "font-size": "32sp",
+    "font-weight": "500",
+    "shape": "rounded-corner(10dp, 10dp, 10dp, 10dp)",
+    "shadow-elevation": "6dp",
+    "shadow-color": "#00000066"
+  },
+  "key-popup-element": {
+    "font-size": "22sp"
   },
   "key-popup-element:focus": {
     "background": "var(--focused-popup-surface)",
+    "foreground": "var(--on-surface)",
     "shape": "var(--shape)"
   },
   "key-popup-element[code=-255]": {
@@ -236,6 +268,10 @@
     "shape": "rectangle()",
     "text-max-lines": "1",
     "text-overflow": "ellipsis"
+  },
+  "smartbar-candidate-word[first=1]": {
+    "foreground": "var(--primary)",
+    "font-weight": "500"
   },
   "smartbar-candidate-word:pressed": {
     "background": "var(--surface)",

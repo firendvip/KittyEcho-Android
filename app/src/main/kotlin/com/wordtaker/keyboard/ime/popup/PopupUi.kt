@@ -18,7 +18,6 @@ package com.wordtaker.keyboard.ime.popup
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -30,6 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import com.wordtaker.keyboard.ime.keyboard.Key
+import com.wordtaker.keyboard.ime.text.key.KeyType
+import com.wordtaker.keyboard.ime.text.keyboard.TextKey
 import com.wordtaker.keyboard.ime.theme.FlorisImeUi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -42,6 +43,10 @@ import com.wordtaker.lib.snygg.ui.SnyggRow
 import com.wordtaker.lib.snygg.ui.SnyggText
 
 val GlobalStateNumPopupsShowing = MutableStateFlow(0)
+
+// WordTaker T9 (P0-1): same split pattern as the key face ("2 ABC".."9 WXYZ").
+// Case-insensitive: auto_text_key lowercases labels while the keyboard is unshifted.
+private val T9_POPUP_LABEL_REGEX = """^(\d) ([A-Za-z]+)$""".toRegex()
 
 @Composable
 fun PopupBaseBox(
@@ -62,16 +67,37 @@ fun PopupBaseBox(
         attributes = attributes,
         modifier = modifier,
     ) {
+        // WordTaker (P0-3.2): the bubble is now a compact box floating above the key, so the
+        // character is centered in the whole bubble (magnified via the key-popup-box font
+        // size). Letter keys mirror the key face's cosmetic uppercase so bubble and key cap
+        // always show the same case; T9 group labels render split (letters main, digit small).
         key.label?.let { label ->
-            SnyggBox(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(key.visibleBounds.height.toDp())
-                    .align(Alignment.TopCenter),
+            val displayLabel = if (
+                key is TextKey &&
+                key.computedData.type == KeyType.CHARACTER &&
+                key.computedData.code in 'a'.code..'z'.code
             ) {
+                label.uppercase()
+            } else {
+                label
+            }
+            val t9Match = T9_POPUP_LABEL_REGEX.matchEntire(displayLabel)
+            if (t9Match != null) {
+                // Letters inherit the bubble's magnified font size; the digit stays small.
                 SnyggText(
                     modifier = Modifier.align(Alignment.Center),
-                    text = label,
+                    text = t9Match.groupValues[2].uppercase(),
+                )
+                SnyggText(
+                    elementName = FlorisImeUi.KeyT9Digit.elementName,
+                    attributes = attributes,
+                    modifier = Modifier.align(Alignment.TopStart),
+                    text = t9Match.groupValues[1],
+                )
+            } else {
+                SnyggText(
+                    modifier = Modifier.align(Alignment.Center),
+                    text = displayLabel,
                 )
             }
         }

@@ -64,6 +64,49 @@ private data class CachedPopupMapping(
     val mapping: PopupMapping,
 )
 
+/**
+ * WordTaker WeChat/iOS-style 全拼 QWERTY hints. Each letter key permanently shows the mapped
+ * number/symbol at its top-right, and long-pressing the key inputs that number/symbol.
+ *
+ * This is the single source of truth for the per-letter hints on the [pinyin_qwerty] layout.
+ * Editing a value here changes both the displayed hint and the long-press output.
+ * `code` is the character actually committed on long-press; `label` is what is rendered.
+ */
+private val PINYIN_QWERTY_KEY_HINTS: Map<Int, TextKeyData> by lazy {
+    fun hint(code: Int, label: String) = TextKeyData(code = code, label = label)
+    mapOf(
+        // Row 1 -> digits 1234567890
+        'q'.code to hint(49, "1"),
+        'w'.code to hint(50, "2"),
+        'e'.code to hint(51, "3"),
+        'r'.code to hint(52, "4"),
+        't'.code to hint(53, "5"),
+        'y'.code to hint(54, "6"),
+        'u'.code to hint(55, "7"),
+        'i'.code to hint(56, "8"),
+        'o'.code to hint(57, "9"),
+        'p'.code to hint(48, "0"),
+        // Row 2 -> symbols (provisional, trivially editable)
+        'a'.code to hint(45, "-"),
+        's'.code to hint(47, "/"),
+        'd'.code to hint(58, ":"),
+        'f'.code to hint(59, ";"),
+        'g'.code to hint(40, "("),
+        'h'.code to hint(41, ")"),
+        'j'.code to hint(126, "~"),
+        'k'.code to hint(8220, "“"), // “
+        'l'.code to hint(8221, "”"), // ”
+        // Row 3 -> symbols (对齐参考图: @ . # ` ? ! …)
+        'z'.code to hint(64, "@"),
+        'x'.code to hint(46, "."),
+        'c'.code to hint(35, "#"),
+        'v'.code to hint(96, "`"),
+        'b'.code to hint(63, "?"),
+        'n'.code to hint(33, "!"),
+        'm'.code to hint(8230, "…"),
+    )
+}
+
 data class DebugLayoutComputationResult(
     val main: Result<CachedLayout?>,
     val mod: Result<CachedLayout?>,
@@ -263,24 +306,27 @@ class LayoutManager(context: Context) {
             }
         }
 
-        // Add hints to keys
-        if (keyboardMode == KeyboardMode.CHARACTERS && computedArrangement.isNotEmpty()) {
-            val symbolsComputedArrangement = computeKeyboardAsync(KeyboardMode.SYMBOLS, subtype).await().arrangement
-            // number row hint always happens on first row
-            if (prefs.keyboard.hintedNumberRowEnabled.get() && symbolsComputedArrangement.isNotEmpty()) {
-                val row = computedArrangement[0]
-                val symbolRow = symbolsComputedArrangement[0]
-                addRowHints(row, symbolRow, KeyType.NUMERIC)
-            }
-            // all other symbols are added bottom-aligned
-            val rOffset = computedArrangement.size - symbolsComputedArrangement.size
-            for ((r, row) in computedArrangement.withIndex()) {
-                if (r < rOffset) {
-                    continue
-                }
-                val symbolRow = symbolsComputedArrangement.getOrNull(r - rOffset)
-                if (symbolRow != null) {
-                    addRowHints(row, symbolRow, KeyType.CHARACTER)
+        // WordTaker: 全拼 QWERTY gets explicit WeChat-style per-letter number/symbol hints
+        // (data-driven, see [PINYIN_QWERTY_KEY_HINTS]) instead of the positional symbols-layout
+        // hints. Each hint shows top-right and is long-press inputtable.
+        val isPinyinQwerty = main?.name?.componentId == "pinyin_qwerty"
+        // WordTaker: the 全拼 QWERTY shows a small gray number/symbol hint above every letter
+        // key (WeChat/iOS pinyin style, see the reference). The per-letter mapping lives in
+        // [PINYIN_QWERTY_KEY_HINTS]; applyPinyinQwertyHints stores it as each key's symbol hint,
+        // which renders top-center and is long-press inputtable.
+        if (keyboardMode == KeyboardMode.CHARACTERS && computedArrangement.isNotEmpty() && isPinyinQwerty &&
+            prefs.keyboard.hintedSymbolsEnabled.get()) {
+            applyPinyinQwertyHints(computedArrangement)
+        } else if (keyboardMode == KeyboardMode.CHARACTERS && computedArrangement.isNotEmpty()) {
+            // WordTaker: only the 全拼 pinyin_qwerty layout shows the WeChat-style per-letter
+            // symbol hints (handled in the branch above). Other character layouts (e.g. the
+            // latin/English keyboard) stay clean — no positional symbol hints — preserving the
+            // minimal WeChat look. The number-row hint remains pref-gated (off by default).
+            if (prefs.keyboard.hintedNumberRowEnabled.get()) {
+                val symbolsComputedArrangement =
+                    computeKeyboardAsync(KeyboardMode.SYMBOLS, subtype).await().arrangement
+                if (symbolsComputedArrangement.isNotEmpty()) {
+                    addRowHints(computedArrangement[0], symbolsComputedArrangement[0], KeyType.NUMERIC)
                 }
             }
         }
@@ -296,6 +342,32 @@ class LayoutManager(context: Context) {
                 flogWarning(LogTopic.LAYOUT_MANAGER) { it.toString() }
             }.getOrNull()?.mapping
         )
+    }
+
+    /**
+     * Applies the explicit WeChat-style [PINYIN_QWERTY_KEY_HINTS] to every letter key of the
+     * computed 全拼 arrangement. The hint is stored as the key's symbol hint, so it renders at the
+     * top-right and is merged into the key's long-press popups by [TextKey.compute].
+     */
+    private fun applyPinyinQwertyHints(arrangement: List<Array<TextKey>>) {
+        for (row in arrangement) {
+            for (key in row) {
+                val computed = key.data.compute(DefaultComputingEvaluator) ?: continue
+                if (computed.type != KeyType.CHARACTER) {
+                    continue
+                }
+                // Normalize to the lowercase code so the lookup is independent of the default
+                // evaluator's shift state (a'..'z' / 'A'..'Z' both map to the same hint).
+                val lookupCode = if (computed.code in 'A'.code..'Z'.code) {
+                    computed.code + ('a'.code - 'A'.code)
+                } else {
+                    computed.code
+                }
+                PINYIN_QWERTY_KEY_HINTS[lookupCode]?.let { hint ->
+                    key.computedSymbolHint = hint
+                }
+            }
+        }
     }
 
     private fun addRowHints(main: Array<TextKey>, hint: Array<TextKey>, hintType: KeyType) {

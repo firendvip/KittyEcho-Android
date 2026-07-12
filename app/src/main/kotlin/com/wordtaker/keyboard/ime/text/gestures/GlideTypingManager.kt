@@ -97,18 +97,33 @@ class GlideTypingManager(context: Context) : GlideTypingGesture.Listener {
             val suggestions = glideTypingClassifier.getSuggestions(MAX_SUGGESTION_COUNT, true)
 
             withContext(Dispatchers.Main) {
-                val suggestionList = buildList {
-                    suggestions.subList(
-                        1.coerceAtMost(min(commit.compareTo(false), suggestions.size)),
-                        maxSuggestionsToShow.coerceAtMost(suggestions.size)
-                    ).map { keyboardManager.fixCase(it) }.forEach {
-                        add(WordSuggestionCandidate(it, confidence = 1.0))
+                // On the Chinese pinyin subtype, a glide result is a spelled pinyin string
+                // (e.g. "nihao"), not a finished word. It must not be shown as a smartbar
+                // candidate (that would show raw Latin letters instead of Hanzi) nor
+                // committed as final text -- instead it is inserted as composing text on
+                // gesture completion so the existing pinyin decoder can turn it into real
+                // Hanzi candidates. See [KeyboardManager.commitGlidePinyinSpelling].
+                val activeLocale = subtypeManager.activeSubtype.primaryLocale
+                val isPinyinGlide = activeLocale.language == "zh" && activeLocale.variant == "pinyin"
+
+                if (!isPinyinGlide) {
+                    val suggestionList = buildList {
+                        suggestions.subList(
+                            1.coerceAtMost(min(commit.compareTo(false), suggestions.size)),
+                            maxSuggestionsToShow.coerceAtMost(suggestions.size)
+                        ).map { keyboardManager.fixCase(it) }.forEach {
+                            add(WordSuggestionCandidate(it, confidence = 1.0))
+                        }
                     }
+                    nlpManager.suggestDirectly(suggestionList)
                 }
 
-                nlpManager.suggestDirectly(suggestionList)
                 if (commit && suggestions.isNotEmpty()) {
-                    keyboardManager.commitGesture(suggestions.first())
+                    if (isPinyinGlide) {
+                        keyboardManager.commitGlidePinyinSpelling(suggestions.first())
+                    } else {
+                        keyboardManager.commitGesture(suggestions.first())
+                    }
                 }
                 callback.invoke(true)
             }

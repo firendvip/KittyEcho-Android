@@ -1,6 +1,7 @@
 package com.wordtaker.keyboard.wordtaker.toolbar
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,10 +53,10 @@ fun ImeToolbar(modifier: Modifier = Modifier) {
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Leftmost: settings entry (smiling cat head). Opens the in-IME settings
-        // panel in place (no Activity). Tapping again while open returns to keyboard.
-        ToolbarIconButton(
-            iconRes = R.drawable.ic_wt_settings,
+        // Leftmost: settings entry, now shown as OUR cat-head avatar. Opens the in-IME
+        // settings panel in place (no Activity). Tapping again while open returns to
+        // keyboard. (替换为小猫头像，并保留设置功能。)
+        ToolbarCatButton(
             contentDescription = "设置",
             onClick = {
                 val current = keyboardManager.activeState.imeUiMode
@@ -102,25 +103,71 @@ fun ToolbarIconButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // P2-303: 深色模式下白色圆底刺眼、与周边不统一 —— 圆底/图标随系统深浅取色。
+    val dark = isSystemInDarkTheme()
     IconButton(
         onClick = onClick,
         modifier = modifier
             .size(WT_TOOLBAR_BUTTON_SIZE_DP.dp)
             .clip(CircleShape)
-            .background(Color.White, CircleShape),
+            .background(if (dark) WT_TOOLBAR_CIRCLE_DARK else Color.White, CircleShape),
     ) {
         Icon(
             painter = painterResource(iconRes),
             contentDescription = contentDescription,
             modifier = Modifier.size(WT_TOOLBAR_ICON_SIZE_DP.dp),
-            tint = WT_TOOLBAR_ICON_TINT,
+            tint = if (dark) WT_TOOLBAR_ICON_TINT_DARK else WT_TOOLBAR_ICON_TINT,
+        )
+    }
+}
+
+/**
+ * Same 28dp circular white slot as [ToolbarIconButton], but the glyph is OUR cat
+ * head ([R.drawable.ic_brand_cat]) instead of a tinted line icon. The cat head is
+ * drawn smaller than the circle (inner padding) and the whole thing is clipped to a
+ * clean white CIRCLE, so it reads as a tiny round avatar that sits exactly where the
+ * settings gear used to. onClick is preserved (opens settings) — 替换为小猫头像，并保留
+ * 设置功能(链接设置).
+ */
+@Composable
+fun ToolbarCatButton(
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier
+            .size(WT_TOOLBAR_BUTTON_SIZE_DP.dp)
+            .clip(CircleShape)
+            // P2-303: 同 ToolbarIconButton，深色模式用深色圆底（猫头自身彩色不变）。
+            .background(
+                if (isSystemInDarkTheme()) WT_TOOLBAR_CIRCLE_DARK else Color.White,
+                CircleShape,
+            ),
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_brand_cat),
+            contentDescription = contentDescription,
+            // No tint: keep the cat's own colours. Inner padding shrinks the head so
+            // it doesn't touch the circle edge.
+            tint = Color.Unspecified,
+            modifier = Modifier
+                .size(WT_TOOLBAR_BUTTON_SIZE_DP.dp)
+                .clip(CircleShape)
+                .padding(WT_TOOLBAR_CAT_INSET_DP.dp),
         )
     }
 }
 
 internal val WT_TOOLBAR_ICON_TINT = Color(0xFF3C4043)
+// P2-303 深色模式配色：圆底与录音"取消"药丸同档深灰，图标转浅灰（与 TalkPill 前景一致）。
+internal val WT_TOOLBAR_CIRCLE_DARK = Color(0xFF2E3033)
+internal val WT_TOOLBAR_ICON_TINT_DARK = Color(0xFFBFC3C7)
 private const val TOOLBAR_HEIGHT_DP = 44
-// item4: 微信输入法那种白圆——适中、和谐。圆 34→28dp、图标 20→17dp，比例协调更干净。
-const val WT_TOOLBAR_BUTTON_SIZE_DP = 28
-const val WT_TOOLBAR_ICON_SIZE_DP = 17
+// item(adjust2): 白色圆底"抱紧"图标 —— 圆只比图标每边大 ~3dp (27 vs 21)，更精致小巧。
+const val WT_TOOLBAR_BUTTON_SIZE_DP = 27
+const val WT_TOOLBAR_ICON_SIZE_DP = 21
+// item: 小猫头像在 28dp 白圆里的内缩，让猫头不贴圆边、视觉更小巧。
+const val WT_TOOLBAR_CAT_INSET_DP = 3
 private const val BUTTON_GAP_DP = 10

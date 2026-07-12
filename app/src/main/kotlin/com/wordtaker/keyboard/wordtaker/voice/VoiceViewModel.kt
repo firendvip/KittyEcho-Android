@@ -39,6 +39,8 @@ data class VoiceUiState(
     val recording: Boolean = false,
     val level: Float = 0f,
     val busy: Boolean = false,
+    /** Live streaming partial transcript shown as a caption while recording. */
+    val partialText: String = "",
 ) {
     val isProcessing: Boolean get() = busy
 }
@@ -69,15 +71,67 @@ class VoiceViewModel(
         .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsState())
 
     private var levelJob: Job? = null
+    // Tracks the in-flight recognize/polish coroutine so [cancel] can abort it.
+    private var processJob: Job? = null
+
+    // 需求9：取消守卫。cancel() 置 true；一旦置位，进行中的识别/润色协程即使已越过挂起点，
+    // 也不得再 tryEmit 上屏或写历史。startRecording() 重置。@Volatile 保证跨线程可见。
+    @Volatile
+    private var cancelled = false
+
+    init {
+        // 流式 partial：录音中把引擎的实时字幕灌进 UI 状态（阶段2 边说边出字）。
+        viewModelScope.launch {
+            speechEngine.partials.collect { partial ->
+                val current = _state.value
+                if (current.phase == VoicePhase.Recording && current.partialText != partial) {
+                    _state.value = current.copy(partialText = partial)
+                }
+            }
+        }
+        // 静音 endpoint：引擎检测到说完（尾部静音）→ 自动定稿，等价于用户点一下结束。
+        viewModelScope.launch {
+            speechEngine.endpoints.collect {
+                if (_state.value.phase == VoicePhase.Recording) {
+                    Log.d(TAG, "endpoint detected -> auto stop")
+                    stopAndProcess()
+                }
+            }
+        }
+    }
 
     fun onTap() {
         val current = _state.value
+        // During Recognizing/Polishing the ONLY way to abort is the explicit 取消 button
+        // ([cancel]); a background tap must not trigger a hidden action.
         if (current.isProcessing) return
         if (current.phase == VoicePhase.Idle) {
             startRecording()
         } else if (current.phase == VoicePhase.Recording) {
             stopAndProcess()
         }
+    }
+
+    /**
+     * User-initiated abort from the visible 取消 button. Works in ANY non-idle phase:
+     *  - Recording: stops the mic (levelJob + speechEngine.cancel()).
+     *  - Recognizing/Polishing: cancels the in-flight coroutine.
+     * Never commits text and never writes history. Plays the end tone (symmetry with
+     * start) when enabled, then resets to Idle.
+     */
+    fun cancel() {
+        val current = _state.value
+        if (current.phase == VoicePhase.Idle) return
+        cancelled = true
+        levelJob?.cancel()
+        levelJob = null
+        processJob?.cancel()
+        processJob = null
+        runCatching { speechEngine.cancel() }
+        val toneOn = settings.value.tone
+        toneController.endBeep(toneOn, settings.value.toneStyle)
+        _state.value = VoiceUiState()
+        Log.d(TAG, "cancel: aborted, reset to Idle")
     }
 
     /**
@@ -95,8 +149,10 @@ class VoiceViewModel(
 
     /**
      * Stops an active recording and plays the end tone, then discards the audio.
-     * Called when the user taps the Keyboard icon to switch away from the cat panel
-     * mid-recording. The end tone always plays so the start/end pair is symmetrical.
+     * Lifecycle safety net (P2-106 幽灵录音): called from the IME service's
+     * onWindowHidden/onFinishInputView (and [onCleared]) so that switching apps /
+     * hiding the keyboard mid-recording always releases the AudioRecord and resets
+     * the UI. The end tone always plays so the start/end pair is symmetrical (P2-009c).
      *
      * Safety: only acts when phase == Recording. Does NOT abort an in-progress
      * Recognizing/Polishing/Success coroutine — those must run to completion so the
@@ -115,9 +171,17 @@ class VoiceViewModel(
     }
 
     private fun startRecording() {
+        cancelled = false
         val toneOn = settings.value.tone
+        // 顺序敏感（真机 vivo iQOO 8 实测得出，勿改回）：
+        // 1) 先开麦克风再播提示音——提示音输出流启动若与录音通路建立同时发生，
+        //    audioserver 会让 AudioRecord 首帧延迟数秒、句首被吞（原「前切」bug）。
+        // 2) 提示音在开麦后播放会被自己的麦克风录进（解码成垃圾字、其后停顿提前触发
+        //    endpoint），故让引擎丢弃录音开头的提示音窗口（TONE_GUARD_MS）。
+        // R3-011：提示音关闭时句首被吞已由采集音源改为 VOICE_COMMUNICATION 修复
+        // （见 PcmRecorder 音源注释），无需任何声学预热；关提示音 = 全程无声。
+        speechEngine.start(if (toneOn) TONE_GUARD_MS else 0L)
         toneController.startBeep(toneOn, settings.value.toneStyle)
-        speechEngine.start()
         _state.value = VoiceUiState(
             phase = VoicePhase.Recording,
             recording = true,
@@ -149,7 +213,7 @@ class VoiceViewModel(
             busy = true,
         )
         Log.d(TAG, "stopAndProcess: phase=Recognizing")
-        viewModelScope.launch {
+        processJob = viewModelScope.launch {
             // Terminal-state guarantee: finally block always resets to Idle if we somehow
             // escape via an unhandled path. All normal paths set phase explicitly before
             // reaching the end of this block, so the finally only fires on true exceptions.
@@ -209,6 +273,11 @@ class VoiceViewModel(
                     raw
                 }
 
+                // 需求9：若用户在识别/润色途中点了「取消」，即使已越过挂起点也不得上屏或写历史。
+                if (cancelled) {
+                    Log.i(TAG, "commit skipped: cancelled by user")
+                    return@launch
+                }
                 // Commit FIRST (non-suspending tryEmit) so text is emitted even if the
                 // viewModelScope is cancelled before historyRepository.add completes.
                 _committed.tryEmit(polished)
@@ -290,5 +359,15 @@ class VoiceViewModel(
         const val LEVEL_SWING = 0.6f
         const val SUCCESS_HOLD_MS = 1200L
         const val POLISH_TIMEOUT_MS = 10_000L
+
+        /**
+         * 录音开头丢弃窗口：覆盖起始喵叫（meow.mp3 ≈0.55s，开麦后立即播放，在已捕获
+         * 音频的时间轴上约占 0.05–0.75s，含 ±0.1s 播放启动抖动）。用户以喵叫为
+         * 「开始说话」提示（喵叫约在点击后 0.9s 听完），正常不会在此窗口内开口，
+         * 丢弃不伤真实语音。真机（vivo iQOO 8）多轮标定：600ms 必漏（喵叫尾巴解码成
+         * 「什么」且提前触发 endpoint 截断整句）；700ms 偶漏（抖动时尾巴解码成「嗯/所」
+         * 垃圾前缀）；850ms 全覆盖。勿改小；改大会削掉抢跑说话者的句首字。
+         */
+        const val TONE_GUARD_MS = 850L
     }
 }

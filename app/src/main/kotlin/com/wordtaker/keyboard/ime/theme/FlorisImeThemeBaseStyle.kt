@@ -56,6 +56,7 @@ val FlorisImeThemeBaseStyle = SnyggStylesheet.v2 {
         background = `var`("--surface")
         foreground = `var`("--on-surface")
         fontSize = fontSize(22.sp)
+        fontWeight = fontWeight(FontWeight.Medium)
         shadowElevation = size(2.dp)
         shape = `var`("--shape")
         textMaxLines = textMaxLines(1)
@@ -76,6 +77,7 @@ val FlorisImeThemeBaseStyle = SnyggStylesheet.v2 {
         background = `var`("--surface")
         foreground = `var`("--on-surface")
         fontSize = fontSize(12.sp)
+        fontWeight = fontWeight(FontWeight.Normal)
         textOverflow = textOverflow(TextOverflow.Ellipsis)
     }
     FlorisImeUi.Key.elementName(FlorisImeUi.Attr.Code to listOf(
@@ -104,16 +106,41 @@ val FlorisImeThemeBaseStyle = SnyggStylesheet.v2 {
         background = rgbaColor(0, 0, 0, 0f)
         foreground = `var`("--on-surface-variant")
         fontFamily = genericFontFamily(FontFamily.Monospace)
-        fontSize = fontSize(12.sp)
-        padding = padding(0.dp, 1.dp, 1.dp, 0.dp)
+        fontSize = fontSize(11.sp)
+        padding = padding(2.dp, 0.dp, 0.dp, 0.dp)
         textMaxLines = textMaxLines(1)
+    }
+    // WordTaker (P0-1): T9 split key rendering fallbacks.
+    FlorisImeUi.KeyT9Digit.elementName {
+        background = rgbaColor(0, 0, 0, 0f)
+        foreground = `var`("--on-surface-variant")
+        fontSize = fontSize(11.sp)
+        fontWeight = fontWeight(FontWeight.Medium)
+        padding = padding(4.dp, 2.dp, 0.dp, 0.dp)
+        textMaxLines = textMaxLines(1)
+    }
+    FlorisImeUi.KeyT9Letters.elementName {
+        background = rgbaColor(0, 0, 0, 0f)
+        foreground = `var`("--on-surface")
+        fontSize = fontSize(20.sp)
+        fontWeight = fontWeight(FontWeight.Medium)
+        textMaxLines = textMaxLines(1)
+    }
+    // WordTaker (P1-1 方案2): key-cap bottom edge fallback — transparent (no edge) unless a
+    // theme opts in with a visible color. Keeps borderless variants edge-free by default.
+    FlorisImeUi.KeyEdge.elementName {
+        background = rgbaColor(0, 0, 0, 0f)
     }
     FlorisImeUi.KeyPopupBox.elementName {
         background = rgbaColor(117, 117, 117)
         foreground = `var`("--on-surface")
+        fontSize = fontSize(32.sp)
+        fontWeight = fontWeight(FontWeight.Medium)
+        shape = roundedCornerShape(10.dp)
+        shadowElevation = size(6.dp)
+    }
+    FlorisImeUi.KeyPopupElement.elementName {
         fontSize = fontSize(22.sp)
-        shape = `var`("--shape")
-        shadowElevation = size(2.dp)
     }
     FlorisImeUi.KeyPopupElement.elementName(selector = SnyggSelector.FOCUS) {
         background = rgbaColor(189, 189, 189)

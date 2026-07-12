@@ -36,11 +36,12 @@ import com.wordtaker.keyboard.ime.smartbar.InlineSuggestionsStyleCache
 import com.wordtaker.keyboard.ime.smartbar.quickaction.QuickActionsOverflowPanel
 import com.wordtaker.keyboard.wordtaker.voice.DARK_PANEL_BG
 import com.wordtaker.keyboard.wordtaker.voice.WT_PANEL_GRAY
-import com.wordtaker.keyboard.wordtaker.toolbar.WtCandidatesBar
 import com.wordtaker.keyboard.wordtaker.handwriting.HandwritingInputLayout
 import com.wordtaker.keyboard.ime.nlp.handwriting.HandwritingLanguageProvider
+import com.wordtaker.keyboard.ime.keyboard.KeyboardMode
 import com.wordtaker.keyboard.ime.text.keyboard.TextKeyboardLayout
 import com.wordtaker.keyboard.ime.theme.FlorisImeUi
+import com.wordtaker.keyboard.wordtaker.toolbar.QuickSymbolStrip
 import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.subtypeManager
 import dev.patrickgold.jetpref.datastore.model.collectAsState
@@ -78,9 +79,12 @@ fun TextInputLayout(
             ),
     ) {
         // WordTaker: the full FlorisBoard Smartbar (action toggles + overflow) is
-        // replaced by the minimal WeChat-style ImeToolbar above the keyboard. Only
-        // the pinyin candidate strip remains, collapsing to nothing when empty.
-        WtCandidatesBar()
+        // replaced by the minimal WeChat-style ImeToolbar above the keyboard.
+        // The pinyin candidate strip no longer renders here — candidates now fill
+        // the TOP toolbar row (see CatKeyboardLayout). Keeping it suppressed avoids
+        // double candidates AND keeps the keyboard body height stable (this bar was
+        // already 0-height when empty; it is now always absent).
+        // WtCandidatesBar() — intentionally removed; candidates render in the top strip.
         if (isHandwriting) {
             HandwritingInputLayout()
         } else if (state.isActionsOverflowVisible) {
@@ -99,7 +103,20 @@ fun TextInputLayout(
                         painter = painterResource(R.drawable.ic_incognito),
                     )
                 }
-                TextKeyboardLayout(evaluator = evaluator)
+                // WordTaker: quick-symbol strip above the key rows on the symbols/numeric
+                // keyboards (matches the target design). It is absent on the letter keyboard.
+                val showQuickSymbols = state.keyboardMode == KeyboardMode.SYMBOLS ||
+                    state.keyboardMode == KeyboardMode.SYMBOLS2 ||
+                    state.keyboardMode == KeyboardMode.NUMERIC ||
+                    state.keyboardMode == KeyboardMode.NUMERIC_ADVANCED
+                if (showQuickSymbols) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        QuickSymbolStrip()
+                        TextKeyboardLayout(evaluator = evaluator)
+                    }
+                } else {
+                    TextKeyboardLayout(evaluator = evaluator)
+                }
             }
         }
     }

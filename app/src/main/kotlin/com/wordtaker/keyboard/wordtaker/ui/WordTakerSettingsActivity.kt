@@ -83,6 +83,22 @@ private fun WordTakerSettingsScreen(
             Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                 Spacer(Modifier.height(8.dp))
 
+                // Account & quota entry (阶段3: 登录/额度/兑换/套餐).
+                SectionLabel("账户")
+                val context = androidx.compose.ui.platform.LocalContext.current
+                SelectableRow(
+                    title = "账户与额度",
+                    subtitle = "登录、云端剩余字数、兑换码、字数包",
+                    selected = false,
+                    onClick = {
+                        context.startActivity(
+                            android.content.Intent(context, WordTakerAccountActivity::class.java),
+                        )
+                    },
+                )
+
+                Spacer(Modifier.height(20.dp))
+
                 // Skin (read-only — only the cat skin is available).
                 SectionLabel("皮肤")
                 SelectableRow(
@@ -222,6 +238,7 @@ const val ROLE_VIBECODING = "vibecoding"
 
 // Chinese keyboard style ids — must match the values persisted into
 // prefs.internal.selectedKeyboardStyle and mapped by Subtype.pinyinDefaultFor.
-// 全拼 = full-keyboard pinyin (QWERTY); 九宫格 = T9 nine-grid pinyin.
+// 全拼 = full-keyboard pinyin (QWERTY); 九宫格 = T9 nine-grid pinyin; 手写 = ink pad (Subtype.HANDWRITING_DEFAULT).
 const val KEYBOARD_STYLE_QWERTY = "qwerty_pinyin"
 const val KEYBOARD_STYLE_T9 = "t9_pinyin"
+const val KEYBOARD_STYLE_HANDWRITING = "handwriting"

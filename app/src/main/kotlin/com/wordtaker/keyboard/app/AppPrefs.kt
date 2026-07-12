@@ -224,6 +224,18 @@ abstract class FlorisPreferenceModel : PreferenceModel() {
         )
     }
 
+    val cloudDictionary = CloudDictionary()
+    inner class CloudDictionary {
+        /**
+         * 云词库联想开关：composing 拼音之外异步补充云端候选词，只发拼音编码，不含输入内容。
+         * 免费不计费，默认开启（隐私风险低，见设置页一句话说明）。
+         */
+        val cloudEnabled = boolean(
+            key = "dict__cloud_enabled",
+            default = true,
+        )
+    }
+
     val emoji = Emoji()
     inner class Emoji {
         val preferredSkinTone = enum(
@@ -343,7 +355,7 @@ abstract class FlorisPreferenceModel : PreferenceModel() {
     inner class Glide {
         val enabled = boolean(
             key = "glide__enabled",
-            default = false,
+            default = true,
         )
         val showTrail = boolean(
             key = "glide__show_trail",
@@ -504,12 +516,17 @@ abstract class FlorisPreferenceModel : PreferenceModel() {
         )
         val hintedSymbolsEnabled = boolean(
             key = "keyboard__hinted_symbols_enabled",
-            // WordTaker: WeChat-style minimal keys show no symbol hint superscripts.
+            // WordTaker: clean WeChat/iOS-style 全拼 QWERTY has NO per-letter number/symbol hints
+            // (see the A55 reference). This gate is OFF by default so letter keys stay clean; the
+            // per-letter mapping (applyPinyinQwertyHints, pinyin_qwerty only) renders only when a
+            // user turns this on in settings.
             default = false,
         )
         val hintedSymbolsMode = enum(
             key = "keyboard__hinted_symbols_mode",
-            default = KeyHintMode.SMART_PRIORITY,
+            // HINT_PRIORITY puts the hint first in the long-press popup, so a long-press commits
+            // the hinted number/symbol directly.
+            default = KeyHintMode.HINT_PRIORITY,
         )
         val utilityKeyEnabled = boolean(
             key = "keyboard__utility_key_enabled",

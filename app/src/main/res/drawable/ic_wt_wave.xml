@@ -1,0 +1,28 @@
+<!-- Voice-level waveform: five rounded vertical bars of varying heights, centred.
+     Tinted at the call site (gray on the space bar). ~24dp viewport. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- bar 1 (short) -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M3,10.5m0,1.25a1.25,1.25 0 0 1 2.5,0l0,0.5a1.25,1.25 0 0 1 -2.5,0z" />
+    <!-- bar 2 (tall) -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M7.75,7m0,1.25a1.25,1.25 0 0 1 2.5,0l0,7a1.25,1.25 0 0 1 -2.5,0z" />
+    <!-- bar 3 (tallest, centre) -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M10.75,5m0,1.25a1.25,1.25 0 0 1 2.5,0l0,11a1.25,1.25 0 0 1 -2.5,0z" />
+    <!-- bar 4 (tall) -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M13.75,7m0,1.25a1.25,1.25 0 0 1 2.5,0l0,7a1.25,1.25 0 0 1 -2.5,0z" />
+    <!-- bar 5 (short) -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M18.5,10.5m0,1.25a1.25,1.25 0 0 1 2.5,0l0,0.5a1.25,1.25 0 0 1 -2.5,0z" />
+</vector>

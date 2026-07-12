@@ -17,14 +17,14 @@ import kotlin.math.sin
 /**
  * Plays short UI tones for recording start / end.
  *
- * Two styles, selected by [SettingsState.toneStyle]:
- *  - "meow" (default): plays the ported macOS "喵" sound (res/raw/meow.mp3) via
- *    [SoundPool] — low latency, re-triggerable. End tone is slightly quieter,
- *    mirroring the desktop client (start 1.0×, end 0.85×).
- *  - "beep": the original synthesized [AudioTrack] sine tones (no asset).
+ * 需求#8：只保留"喵"声。无论传入什么 [style]，都播放 ported macOS "喵"
+ * (res/raw/meow.mp3) via [SoundPool] — low latency, re-triggerable. End tone is
+ * slightly quieter, mirroring the desktop client (start 1.0×, end 0.85×). 合成蜂鸣
+ * ([AudioTrack] 正弦音) 已不再使用，仅作为 meow 加载失败时的兜底。
+ *
+ * "无声"修复：构造/首用时即 EAGERLY 预加载 meow 采样，避免首个音因懒加载被丢弃。
  *
  * All audio failures are caught and logged — playing a tone must never crash the app.
- * Construction is cheap; the meow sample loads lazily on first use.
  */
 class ToneController(private val appContext: Context? = null) {
 
@@ -36,6 +36,12 @@ class ToneController(private val appContext: Context? = null) {
 
     @Volatile private var meowSoundId: Int = 0
     @Volatile private var meowLoaded: Boolean = false
+
+    init {
+        // 需求#8：立即预热 SoundPool 并异步加载 meow，使第一次 startBeep 不被丢音。
+        // 放在属性声明之后，确保 init 运行时 soundPoolRef 等字段已初始化。
+        runCatching { pool()?.let { ensureMeowLoaded(it) } }
+    }
 
     /** Lazily build the pool exactly once. Returns null if no context or build failed. */
     private fun pool(): SoundPool? {
@@ -58,29 +64,35 @@ class ToneController(private val appContext: Context? = null) {
         val ctx = appContext ?: return
         if (!meowLoadStarted.compareAndSet(false, true)) return
         runCatching {
-            // Register the listener BEFORE load() so we never miss the callback; it
-            // matches on the captured sample id, avoiding the meowSoundId==0 race.
+            // 捕获 load() 返回的 id 到局部变量后再注册监听并比较，避免监听器读到尚未赋值的
+            // meowSoundId(=0) 竞态。mp3 解码非瞬时，先 load 再注册不会漏掉回调。
+            val id = pool.load(ctx, R.raw.meow, 1)
+            meowSoundId = id
             pool.setOnLoadCompleteListener { _, sampleId, status ->
-                if (status == 0 && sampleId == meowSoundId) meowLoaded = true
+                if (status == 0 && sampleId == id) meowLoaded = true
             }
-            meowSoundId = pool.load(ctx, R.raw.meow, 1)
         }.onFailure {
             Log.w(TAG, "meow load failed", it)
             meowLoadStarted.set(false) // allow a retry on the next tone
         }
     }
 
-    /** Start tone. Gated by [enabled]; style picks meow vs beep. */
-    fun startBeep(enabled: Boolean = true, style: String = SettingsState.DEFAULT_TONE_STYLE) {
+    /**
+     * Start tone. Gated by [enabled]. 需求#8：无论 [style] 为何，一律播放"喵"；
+     * [style] 仅为兼容调用点而保留，不再区分。合成蜂鸣仅在 meow 播放失败时兜底。
+     */
+    fun startBeep(enabled: Boolean = true, @Suppress("UNUSED_PARAMETER") style: String = SettingsState.DEFAULT_TONE_STYLE) {
         if (!enabled) return
-        if (style == SettingsState.TONE_MEOW && playMeow(MEOW_START_VOLUME)) return
+        if (playMeow(MEOW_START_VOLUME)) return
         play(buildTone(startFreq = 880f, endFreq = 880f, durationMs = 80))
     }
 
-    /** End tone. Gated by [enabled]; style picks meow vs beep. */
-    fun endBeep(enabled: Boolean = true, style: String = SettingsState.DEFAULT_TONE_STYLE) {
+    /**
+     * End tone. Gated by [enabled]. 需求#8：一律播放"喵"(略轻)；[style] 保留但忽略。
+     */
+    fun endBeep(enabled: Boolean = true, @Suppress("UNUSED_PARAMETER") style: String = SettingsState.DEFAULT_TONE_STYLE) {
         if (!enabled) return
-        if (style == SettingsState.TONE_MEOW && playMeow(MEOW_END_VOLUME)) return
+        if (playMeow(MEOW_END_VOLUME)) return
         play(buildTone(startFreq = 660f, endFreq = 440f, durationMs = 120))
     }
 

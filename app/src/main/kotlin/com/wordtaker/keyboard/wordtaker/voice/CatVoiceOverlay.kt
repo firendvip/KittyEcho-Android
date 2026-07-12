@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -134,8 +135,15 @@ fun CatVoiceOverlay(modifier: Modifier = Modifier) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
+            // 需求#10：忙碌(识别/润色)时也显示状态文案。
+            val hint = when (state.phase) {
+                VoicePhase.Recording -> "正在倾听...点击结束"
+                VoicePhase.Recognizing -> "正在识别..."
+                VoicePhase.Polishing -> "正在AI润色中..."
+                else -> "正在倾听...点击结束"
+            }
             Text(
-                text = "正在倾听...点击结束",
+                text = hint,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -155,9 +163,30 @@ fun CatVoiceOverlay(modifier: Modifier = Modifier) {
                     .padding(top = 4.dp)
                     .size(width = catSize * CAT_ASPECT_RATIO, height = catSize),
             )
+            // 需求#9：录音/识别/润色全程可点"取消"，随时中止(不上屏、不写历史)。
+            Box(
+                modifier = Modifier
+                    .padding(top = 12.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(CANCEL_CORNER_DP.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = vm::cancel,
+                    )
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    text = "取消",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
+
+private const val CANCEL_CORNER_DP = 18
 
 private const val OVERLAY_SCRIM_ALPHA = 0.96f
 private const val CAT_ASPECT_RATIO = 5f / 6f

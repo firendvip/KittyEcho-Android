@@ -6,8 +6,8 @@
   <group android:name="cat"
       android:translateX="54"
       android:translateY="54"
-      android:scaleX="0.7776"
-      android:scaleY="0.7776">
+      android:scaleX="0.62"
+      android:scaleY="0.62">
     <group android:translateX="-50" android:translateY="-51">
       <path android:pathData="M22,42 L29,9 L51,33 Z" android:fillColor="#000000"/>
       <path android:pathData="M78,42 L71,9 L49,33 Z" android:fillColor="#000000"/>

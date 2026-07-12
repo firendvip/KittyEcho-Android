@@ -486,6 +486,8 @@
     <string name="pref__suggestion__api30_inline_suggestions_enabled__label" comment="Preference title">System autofill suggestions</string>
     <string name="pref__suggestion__api30_inline_suggestions_enabled__summary" comment="Preference summary">Show inline suggestions provided by autofill services</string>
     <string name="pref__suggestion__incognito_mode__label" comment="Label of Incognito mode preference in Typing">Incognito mode</string>
+    <string name="pref__dict__cloud_enabled__label" comment="Preference title">Cloud dictionary suggestions</string>
+    <string name="pref__dict__cloud_enabled__summary" comment="Preference summary">Fetch extra candidates from the cloud while typing Pinyin. Only the Pinyin you type is sent, never your text content.</string>
     <string name="pref__correction__title" comment="Preference group title">Corrections</string>
     <string name="pref__correction__auto_capitalization__label" comment="Preference title">Auto-capitalization</string>
     <string name="pref__correction__auto_capitalization__summary" comment="Preference summary">Capitalize words based on the current input context</string>

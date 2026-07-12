@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -96,6 +97,11 @@ import com.wordtaker.lib.snygg.ui.rememberSnyggThemeQuery
  * @see BottomSheetWindow
  * @see DevtoolsOverlay
  */
+// 微信风底部悬浮空隙 (dp): fixed 模式下键盘内容之下的固定空白，让键盘不贴屏幕最底。
+// 空隙渲染为键盘底色 (WindowInner 的 SnyggBox 背景铺满 padding 之外)，并计入 IME 窗口高度，
+// 故宿主 App 内容会被相应顶起、不被遮挡。
+private const val FIXED_BOTTOM_GAP_DP = 14
+
 @Composable
 fun ImeRootWindow() {
     val density = LocalDensity.current
@@ -156,6 +162,12 @@ fun BoxScope.ImeWindow() {
         )
     }
 
+    // BUG #11: give the window an explicit MINIMUM height so the very first frame can't
+    // collapse to zero/partial height (which shows up as black bands top & bottom while
+    // the content measures). We keep wrapContentHeight() for the natural size, but floor it
+    // at the spec's baseline keyboard height so there is always a non-zero, sane first frame.
+    val minWindowHeight = windowSpec.props.keyboardHeight
+
     FloatingDockToFixedIndicator()
 
     SnyggBox(
@@ -172,6 +184,7 @@ fun BoxScope.ImeWindow() {
                     .offset(props.offsetLeft, -props.offsetBottom)
                     .width(props.keyboardWidth)
             }
+            .heightIn(min = minWindowHeight)
             .wrapContentHeight()
             .onGloballyPositioned { coords ->
                 val boundsPx = coords.boundsInRoot().roundToIntRect()
@@ -218,7 +231,12 @@ private fun ImeInnerWindow() {
                     .padding(
                         start = props.paddingLeft.coerceAtLeast(0.dp),
                         end = props.paddingRight.coerceAtLeast(0.dp),
-                        bottom = props.paddingBottom.coerceAtLeast(0.dp),
+                        // 微信风: 键盘整体不再贴屏幕最底，底部留一条固定空隙 (键盘底色填充)。
+                        // 这条空隙加在用户可调 paddingBottom 之上；因为窗口是 wrapContentHeight，
+                        // 内容变高会让整个 IME 窗口变高，onGloballyPositioned 上报的窗口 top 随之上移，
+                        // onComputeInsets 的 contentTopInsets = windowBounds.top 因此已含这条空隙，
+                        // 宿主 App 内容被顶起相同高度，绝不会被空隙遮挡或重叠。
+                        bottom = props.paddingBottom.coerceAtLeast(0.dp) + FIXED_BOTTOM_GAP_DP.dp,
                     )
             }
             .ifIsInstance<ImeWindowProps.Floating>(windowSpec.props) {

@@ -60,6 +60,8 @@ import com.wordtaker.keyboard.lib.devtools.flogError
 import com.wordtaker.keyboard.lib.devtools.flogInfo
 import com.wordtaker.keyboard.lib.devtools.flogWarning
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
+import com.wordtaker.keyboard.wordtaker.voice.VoiceViewModel
+import androidx.lifecycle.ViewModelProvider
 import com.wordtaker.keyboard.lib.util.InputMethodUtils
 import com.wordtaker.keyboard.lib.util.debugSummarize
 import com.wordtaker.keyboard.lib.util.launchActivity
@@ -414,7 +416,45 @@ class FlorisImeService : LifecycleInputMethodService() {
     override fun onFinishInputView(finishingInput: Boolean) {
         flogInfo { "finishing=$finishingInput" }
         super.onFinishInputView(finishingInput)
+        // P2-106 幽灵录音兜底：输入会话结束（切 App/焦点丢失等）时若仍在录音，立即停录、
+        // 释放 AudioRecord 并播结束音。stopVoiceRecordingIfActive 在非录音态是 no-op。
+        stopVoiceRecordingIfActive()
         editorInstance.handleFinishInputView()
+    }
+
+    /**
+     * Lifecycle safety net (P2-106 幽灵录音): stops an in-progress voice recording no
+     * matter which imeUiMode is active, releasing the AudioRecord and playing the end
+     * tone (P2-009c 对称性), and resets the voice UI state so the recording overlay can
+     * never linger into the next session.
+     *
+     * The IME service IS the [androidx.lifecycle.ViewModelStoreOwner] of the compose
+     * view tree (see LifecycleInputMethodService), so this resolves the SAME
+     * [VoiceViewModel] instance that [com.wordtaker.keyboard.wordtaker.voice.CatKeyboardLayout]
+     * obtained via `viewModel()`. [VoiceViewModel.stopRecordingAndEndTone] only acts
+     * while phase == Recording — an in-flight Recognizing/Polishing run is left alone
+     * so its text still commits. On any failure we fall back to cancelling the engine
+     * directly so the microphone is ALWAYS released.
+     */
+    private fun stopVoiceRecordingIfActive() {
+        // A pending外部触发 (toolbar icon等) must not survive the session either,
+        // otherwise the next keyboard open would spontaneously start recording.
+        com.wordtaker.keyboard.wordtaker.voice.VoiceTrigger.clearPending()
+        runCatching {
+            ViewModelProvider(
+                this,
+                VoiceViewModel.Factory(
+                    speechEngine = AppGraph.speechEngine,
+                    polisher = AppGraph.polisher,
+                    historyRepository = AppGraph.historyRepository,
+                    settingsRepository = AppGraph.settingsRepository,
+                    toneController = AppGraph.toneController,
+                ),
+            )[VoiceViewModel::class.java].stopRecordingAndEndTone()
+        }.onFailure {
+            // VM 不可用时的双保险：至少直接放掉底层引擎/麦克风。
+            runCatching { AppGraph.speechEngine.cancel() }
+        }
     }
 
     override fun onFinishInput() {
@@ -429,6 +469,11 @@ class FlorisImeService : LifecycleInputMethodService() {
         if (windowController.onWindowShown()) {
             flogInfo(LogTopic.IMS_EVENTS)
             inputFeedbackController.updateSystemPrefsState()
+            // P2-303 深色模式键区不变色：FOLLOW_SYSTEM 主题只在 onConfigurationChanged
+            // 时评估一次；若那一刻 appContext 的 uiMode 尚未更新（时序竞争），键区会一直
+            // 停在错误的日/夜样式且之后无人纠正。这里在每次窗口显示时重新评估一次
+            // （已缓存的主题命中 cache，代价极小），保证键区始终与系统深浅色一致。
+            themeManager.configurationChangeCounter.update { it + 1 }
         } else {
             flogWarning(LogTopic.IMS_EVENTS) { "Ignoring (is already shown)" }
         }
@@ -440,11 +485,9 @@ class FlorisImeService : LifecycleInputMethodService() {
             flogInfo(LogTopic.IMS_EVENTS)
             // Stop any active voice recording when the IME window is dismissed and
             // tear down the voice overlay so it never reappears stale next time.
-            if (activeState.imeUiMode == ImeUiMode.CAT_VOICE ||
-                com.wordtaker.keyboard.wordtaker.voice.VoiceOverlayController.visible.value
-            ) {
-                runCatching { AppGraph.speechEngine.cancel() }
-            }
+            // P2-106: 不再以 imeUiMode 为条件 —— 录音可能在 TEXT 模式下进行（工具栏/
+            // 长按空格触发），旧条件会漏掉导致幽灵录音（麦克风持续占用+界面残留）。
+            stopVoiceRecordingIfActive()
             com.wordtaker.keyboard.wordtaker.voice.VoiceOverlayController.hide()
             activeState.batchEdit {
                 // Return to the default cat voice界面 when the window is dismissed so the

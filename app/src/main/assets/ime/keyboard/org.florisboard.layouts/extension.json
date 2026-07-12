@@ -368,7 +368,8 @@
         "id": "pinyin_t9",
         "label": "Pinyin T9",
         "authors": [ "wordtaker" ],
-        "direction": "ltr"
+        "direction": "ltr",
+        "modifier": "org.florisboard.layouts:t9"
       },
       {
         "id": "stroke_5key",
@@ -527,6 +528,12 @@
         "id": "default",
         "label": "Default character modifier layout",
         "authors": [ "patrickgold" ],
+        "direction": "ltr"
+      },
+      {
+        "id": "t9",
+        "label": "Pinyin T9 modifier layout",
+        "authors": [ "wordtaker" ],
         "direction": "ltr"
       },
       {

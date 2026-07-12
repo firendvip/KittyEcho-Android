@@ -36,14 +36,22 @@ private const val ENTER_MS = 1400f
 private const val RETURN_MS = 800f
 private const val WALK_W = 0.022f
 private const val PROC_W = 0.04f
-// item6 修正：音符/灯泡等头顶效果收到「头部左上/右上稍近处」。
+// 需求4：所有头顶效果(音符/灯泡/星星/汗滴)必须出现在「猫运动方向的斜上方」。
 // 运行猫 bottom-anchored 于 y=DEMO_H-6=66、高 RUN_VB_H=32 ⇒ 头顶 ≈ y=34。
-// FX 基点 = (rt.x + lastDir*FRONT_SIDE_X, (DEMO_H-30)+FRONT_UP_Y)。
-// FRONT_SIDE_X 由 22→13：朝向那侧、靠近头部角，而非离猫很远。
-// FRONT_UP_Y 由 -10→-16：基点抬到头顶(y≈34)之上 ≈ y=26，效果出现在「头部上方」。
+// FX 基点 = (rt.x + lastDir*FX_DIAG_SIDE_X, (DEMO_H-30)+FRONT_UP_Y+FX_DIAG_UP_Y)。
+// - FX_DIAG_SIDE_X：朝运动方向那一侧的水平偏移，靠头部外上角，由 rt.lastDir 镜像(右行=右、左行=左)。
+//   取 18f：在头部上方偏向运动侧，且对小条幅(28dp)与大画布(200dp)都不会飞出画布。
+// - FX_DIAG_UP_Y：在原 FRONT_UP_Y(-16) 基础上再抬一点，让效果明确高于头顶、形成「斜上方」。
 private const val FRONT_SIDE_X = 13f
 private const val FRONT_UP_Y = -16f
-private const val NOTE_FRONT_BIAS = 4f
+private const val FX_DIAG_SIDE_X = 18f
+private const val FX_DIAG_UP_Y = -8f
+// 睡眠精灵的头部位于 demo 中心左侧约 11f 处（精灵 left = g.c - SLEEP_VB_W/2，头在左半）。
+// 睡眠态 rt.x = 中心，直接用会让 bulb/sparkle 飘到身体右侧，故睡眠态以头部为 FX 锚点。
+private const val FX_SLEEP_HEAD_DX = 11f
+// 需求4：音符在已对角化的基点上，再向运动方向额外偏置，整团音符明显偏运动侧上方。
+// 由 4→9→13：进一步偏向运动方向，配合单向散开确保音符不覆盖头部。
+private const val NOTE_FRONT_BIAS = 13f
 
 private val NOTE_GLYPHS = listOf("♪", "♫", "♩", "♬") // ♪ ♫ ♩ ♬
 private const val NOTE_MAX = 8
@@ -290,7 +298,8 @@ private fun tick(rt: CatRuntime, s: CatState, now: Float) {
                 val kr = easeOut(tr)
                 rt.x = rt.xRet + (c - rt.xRet) * kr
                 rt.lastDir = if (c - rt.x >= 0f) 1f else -1f
-                rt.runScale = 1f
+                // 需求#6：离场(走回)时由大变小，像走向远处 —— 与 enter 的 0.32→1.0 对称。
+                rt.runScale = 1f - 0.68f * kr
                 if (tr >= 1f) { rt.mode = "sleep"; rt.view = "sleep"; rt.x = c; rt.zzzPlaced = false }
             }
         }
@@ -326,7 +335,8 @@ private fun spawnNote(rt: CatRuntime, now: Float) {
             glyph = pick(NOTE_GLYPHS),
             color = pick(NOTE_COLORS),
             sizePx = rand(NOTE_SIZE_MIN, NOTE_SIZE_MAX),
-            leftPx = rt.lastDir * NOTE_FRONT_BIAS + rand(-NOTE_SPREAD, NOTE_SPREAD),
+            // 需求#7：水平偏移单向朝运动方向，音符不会散回头顶上方。
+            leftPx = rt.lastDir * (NOTE_FRONT_BIAS + rand(0f, NOTE_SPREAD / 2f)),
             dx = rand(-NOTE_DX_MAX, NOTE_DX_MAX),
             dy = rand(NOTE_DY_MIN, NOTE_DY_MAX),
             rot = rand(-NOTE_ROT_MAX, NOTE_ROT_MAX),
@@ -396,9 +406,14 @@ private fun DrawScope.drawDemoWorld(
         }
     }
 
-    // ---- FX layer: demo .cs-fx bottom:30px, translate(x+dir*FRONT_SIDE_X, FRONT_UP_Y) ----
-    val fxBaseX = rt.x + rt.lastDir * FRONT_SIDE_X
-    val fxBaseY = (DEMO_H - 30f) + FRONT_UP_Y
+    // ---- FX layer (需求4): 所有效果出现在运动方向的「斜上方」 ----
+    // 水平偏移由 rt.lastDir 驱动 ⇒ 右行=右上、左行=左上，自动镜像。
+    // 垂直在 FRONT_UP_Y 基础上再抬 FX_DIAG_UP_Y，让效果明确高于头顶形成对角线。
+    // bulb / sparkle / sweat / notes 全部读取同一 fxBaseX/fxBaseY，故对角放置统一生效。
+    // 运行态以 rt.x 为头部中心；睡眠态精灵头部在 g.c - FX_SLEEP_HEAD_DX，避免 FX 飘离身体。
+    val catHeadX = if (rt.view == "sleep") g.c - FX_SLEEP_HEAD_DX else rt.x
+    val fxBaseX = catHeadX + rt.lastDir * FX_DIAG_SIDE_X
+    val fxBaseY = (DEMO_H - 30f) + FRONT_UP_Y + FX_DIAG_UP_Y
 
     when (rt.fxShownType) {
         "bulb" -> translate(fxBaseX, fxBaseY + bob(rt.now)) { drawBulb(paths) }

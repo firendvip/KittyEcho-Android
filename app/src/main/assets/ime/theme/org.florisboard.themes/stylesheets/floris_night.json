@@ -5,14 +5,15 @@
     "--primary-variant": "#06AD56",
     "--secondary": "#8A8F94",
     "--secondary-variant": "#6B7280",
-    "--background": "#2C2C2C",
-    "--background-variant": "#4A4A4A",
-    "--surface": "#656565",
-    "--surface-variant": "#707070",
-    "--popup-surface": "#3A3A3A",
+    "--background": "#1C1C1E",
+    "--background-variant": "#2C2C2E",
+    "--surface": "#3A3A3C",
+    "--surface-variant": "#48484A",
+    "--popup-surface": "#48484A",
     "--focused-popup-surface": "#07C160",
     "--drag-marker": "rgb(255,0,0)",
-    "--spacer-color": "#14FFFFFF",
+    "--spacer-color": "#FFFFFF0F",
+    "--key-edge-color": "#00000080",
     "--one-hand-background": "#1b5e20",
     "--one-hand-foreground": "#eeeeee",
     "--incognito-icon-color": "#ffffff11",
@@ -22,9 +23,9 @@
     "--candidate": "#3FD98A",
 
     "--on-primary": "#FFFFFF",
-    "--on-background": "#FDFDFD",
+    "--on-background": "#F2F2F7",
     "--on-background-disabled": "#8A8F94",
-    "--on-surface": "#FDFDFD",
+    "--on-surface": "#F2F2F7",
     "--on-surface-variant": "#8A8F94",
 
     "--shape": "rounded-corner(8dp, 8dp, 8dp, 8dp)",
@@ -71,9 +72,14 @@
     "background": "var(--surface)",
     "foreground": "var(--on-surface)",
     "font-size": "22sp",
+    "font-weight": "500",
     "shape": "var(--shape)",
-    "shadow-elevation": "0dp",
+    "shadow-elevation": "1.5dp",
+    "shadow-color": "#00000066",
     "text-max-lines": "1"
+  },
+  "key-edge": {
+    "background": "var(--key-edge-color)"
   },
   "key:pressed": {
     "background": "var(--surface-variant)",
@@ -91,21 +97,28 @@
     "background": "var(--surface)",
     "foreground": "var(--on-surface-variant)",
     "font-size": "12sp",
+    "font-weight": "normal",
     "text-overflow": "ellipsis"
   },
   "key[code=-7,-11,-201,-202,-203,-227,-233]": {
-    "background": "#3C3C3C",
-    "foreground": "#D6D6D6"
+    "background": "#2C2C2E",
+    "foreground": "#F2F2F7",
+    "shadow-elevation": "1.5dp",
+    "shadow-color": "#00000066"
   },
   "key[code=-7,-11,-201,-202,-203,-227,-233]:pressed": {
-    "background": "#4A4A4A",
-    "foreground": "#D6D6D6"
+    "background": "#3A3A3C",
+    "foreground": "#F2F2F7"
   },
   "key[code=-201,-202,-203]": {
-    "font-size": "16sp"
+    "font-size": "16sp",
+    "font-weight": "500"
   },
   "key[code=-204,-205]": {
     "font-size": "12sp"
+  },
+  "key[code=-204]": {
+    "text-max-lines": "2"
   },
   "key[code=-205]": {
     "text-max-lines": "2"
@@ -126,19 +139,40 @@
     "background": "transparent",
     "foreground": "var(--on-surface-variant)",
     "font-family": "monospace",
-    "font-size": "12sp",
-    "padding": "0dp 1dp 1dp 0dp",
+    "font-size": "11sp",
+    "padding": "2dp 0dp 0dp 0dp",
+    "text-max-lines": "1"
+  },
+  "key-t9-digit": {
+    "background": "transparent",
+    "foreground": "var(--on-surface-variant)",
+    "font-size": "11sp",
+    "font-weight": "500",
+    "padding": "4dp 2dp 0dp 0dp",
+    "text-max-lines": "1"
+  },
+  "key-t9-letters": {
+    "background": "transparent",
+    "foreground": "var(--on-surface)",
+    "font-size": "20sp",
+    "font-weight": "500",
     "text-max-lines": "1"
   },
   "key-popup-box": {
     "background": "var(--popup-surface)",
     "foreground": "var(--on-surface)",
-    "font-size": "22sp",
-    "shape": "var(--shape)",
-    "shadow-elevation": "2dp"
+    "font-size": "32sp",
+    "font-weight": "500",
+    "shape": "rounded-corner(10dp, 10dp, 10dp, 10dp)",
+    "shadow-elevation": "6dp",
+    "shadow-color": "#00000066"
+  },
+  "key-popup-element": {
+    "font-size": "22sp"
   },
   "key-popup-element:focus": {
     "background": "var(--focused-popup-surface)",
+    "foreground": "var(--on-accent)",
     "shape": "var(--shape)"
   },
   "key-popup-element[code=-255]": {
@@ -257,6 +291,10 @@
   "smartbar-candidate-word[auto-commit=1]": {
     "foreground": "var(--candidate)",
     "font-weight": "normal"
+  },
+  "smartbar-candidate-word[first=1]": {
+    "foreground": "var(--candidate)",
+    "font-weight": "500"
   },
   "smartbar-candidate-word:pressed": {
     "background": "var(--surface-variant)",

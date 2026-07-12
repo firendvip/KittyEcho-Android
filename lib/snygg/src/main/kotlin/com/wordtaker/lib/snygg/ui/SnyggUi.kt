@@ -285,10 +285,11 @@ internal fun Modifier.snyggBackground(
     default: Color = Color.Unspecified,
     shape: Shape = style.shape(),
     allowClip: Boolean = true,
+    colorOverride: Color? = null,
 ): Modifier {
     val modifier = when (val bg = style.background) {
         is SnyggStaticColorValue -> this.background(
-            color = bg.color,
+            color = colorOverride ?: bg.color,
             shape = shape,
         )
         else if (default.isSpecified) -> {

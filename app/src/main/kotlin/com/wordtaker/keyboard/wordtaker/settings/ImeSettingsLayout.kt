@@ -38,6 +38,7 @@ import com.wordtaker.keyboard.app.FlorisPreferenceStore
 import com.wordtaker.keyboard.ime.ImeUiMode
 import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
+import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_HANDWRITING
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_QWERTY
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_T9
 import com.wordtaker.keyboard.wordtaker.ui.ROLE_GAOEQ
@@ -125,6 +126,43 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp),
         ) {
+            // 历史记录 entry — moved to the TOP of settings (#5), above AI role.
+            // Opens the in-IME history view in place (#12).
+            SectionLabel("历史记录")
+            SettingsCard(cardBg) {
+                SelectRow(
+                    title = "查看历史记录",
+                    selected = false,
+                    textColor = rowTextColor,
+                    onClick = { openHistory() },
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // 账户与额度 entry (阶段3) — IME 窗口内不便承载表单，跳转独立账户页。
+            SectionLabel("账户")
+            SettingsCard(cardBg) {
+                SelectRow(
+                    title = "账户与额度",
+                    selected = false,
+                    textColor = rowTextColor,
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                android.content.Intent(
+                                    context,
+                                    com.wordtaker.keyboard.wordtaker.ui.WordTakerAccountActivity::class.java,
+                                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                        backToKeyboard()
+                    },
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
             // AI role — names only, no sub-text. Switching takes effect immediately.
             SectionLabel("AI 角色")
             SettingsCard(cardBg) {
@@ -150,39 +188,15 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(12.dp))
 
-            // Prompt tone — style picker (default 喵) + on/off toggle. No sub-text.
+            // Prompt tone — on/off toggle only (#8). The style picker was removed; the tone
+            // always plays "喵" (handled in ToneController). No sub-text.
             SectionLabel("提示音")
             SettingsCard(cardBg) {
-                SelectRow(
-                    title = "喵",
-                    selected = state.toneStyle == SettingsState.TONE_MEOW,
-                    textColor = rowTextColor,
-                    onClick = { scope.launch { repo.setToneStyle(SettingsState.TONE_MEOW) } },
-                )
-                SelectRow(
-                    title = "提示音",
-                    selected = state.toneStyle == SettingsState.TONE_BEEP,
-                    textColor = rowTextColor,
-                    onClick = { scope.launch { repo.setToneStyle(SettingsState.TONE_BEEP) } },
-                )
                 ToggleRow(
                     title = "开启提示音",
                     checked = state.tone,
                     textColor = rowTextColor,
                     onCheckedChange = { scope.launch { repo.setTone(it) } },
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // 历史记录 entry — opens the in-IME history view in place (#12).
-            SectionLabel("历史记录")
-            SettingsCard(cardBg) {
-                SelectRow(
-                    title = "查看历史记录",
-                    selected = false,
-                    textColor = rowTextColor,
-                    onClick = { openHistory() },
                 )
             }
 
@@ -202,6 +216,18 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
                     selected = keyboardStyle == KEYBOARD_STYLE_T9,
                     textColor = rowTextColor,
                     onClick = { scope.launch { prefs.internal.selectedKeyboardStyle.set(KEYBOARD_STYLE_T9) } },
+                )
+                // 手写 entry (阶段4): swaps the active subtype to HANDWRITING_DEFAULT in place,
+                // same live-reseed mechanism as 全拼/九宫格. TextInputLayout detects the subtype
+                // via HandwritingLanguageProvider.ProviderId and swaps in the ink pad.
+                SelectRow(
+                    title = "手写输入",
+                    selected = keyboardStyle == KEYBOARD_STYLE_HANDWRITING,
+                    textColor = rowTextColor,
+                    onClick = {
+                        scope.launch { prefs.internal.selectedKeyboardStyle.set(KEYBOARD_STYLE_HANDWRITING) }
+                        backToKeyboard()
+                    },
                 )
             }
 

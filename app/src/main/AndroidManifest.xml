@@ -128,6 +128,23 @@
             android:theme="@style/FlorisAppTheme"
             android:exported="false"/>
 
+        <!-- WordTaker account/billing screen. Exported + BROWSABLE only for the WeChat
+             OAuth deep link (kittyecho://auth?code=...); singleTask so the browser
+             redirect lands in the existing instance via onNewIntent. -->
+        <activity
+            android:name="com.wordtaker.keyboard.wordtaker.ui.WordTakerAccountActivity"
+            android:label="@string/floris_app_name"
+            android:theme="@style/FlorisAppTheme"
+            android:launchMode="singleTask"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="kittyecho" android:host="auth"/>
+            </intent-filter>
+        </activity>
+
         <!-- WordTaker transparent RECORD_AUDIO permission relay (IME can't request) -->
         <activity
             android:name="com.wordtaker.keyboard.wordtaker.speech.MicPermissionActivity"

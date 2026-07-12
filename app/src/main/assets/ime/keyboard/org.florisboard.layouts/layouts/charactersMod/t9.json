@@ -1,0 +1,10 @@
+[
+  [
+    { "code":    0, "type": "placeholder" }
+  ],
+  [
+    { "code": -227, "label": "language_switch", "type": "system_gui" },
+    { "code":   32, "label": "space" },
+    { "code":   10, "label": "enter", "groupId": 3, "type": "enter_editing" }
+  ]
+]

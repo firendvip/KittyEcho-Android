@@ -93,6 +93,11 @@ fun TypingScreen() = FlorisScreen {
                 title = stringRes(R.string.pref__suggestion__incognito_mode__label),
                 entries = enumDisplayEntriesOf(IncognitoMode::class),
             )
+            SwitchPreference(
+                prefs.cloudDictionary.cloudEnabled,
+                title = stringRes(R.string.pref__dict__cloud_enabled__label),
+                summary = stringRes(R.string.pref__dict__cloud_enabled__summary),
+            )
         }
 
         PreferenceGroup(title = stringRes(R.string.pref__correction__title)) {

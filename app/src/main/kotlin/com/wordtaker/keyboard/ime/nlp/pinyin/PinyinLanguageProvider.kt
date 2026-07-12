@@ -18,6 +18,7 @@ package com.wordtaker.keyboard.ime.nlp.pinyin
 
 import android.content.Context
 import android.icu.text.BreakIterator
+import com.wordtaker.keyboard.appContext
 import com.wordtaker.keyboard.ime.core.Subtype
 import com.wordtaker.keyboard.ime.editor.EditorContent
 import com.wordtaker.keyboard.ime.editor.EditorRange
@@ -26,6 +27,13 @@ import com.wordtaker.keyboard.ime.nlp.SuggestionCandidate
 import com.wordtaker.keyboard.ime.nlp.SuggestionProvider
 import com.wordtaker.keyboard.ime.nlp.WordSuggestionCandidate
 import com.wordtaker.keyboard.lib.devtools.flogDebug
+import com.wordtaker.lib.android.readText
+import com.wordtaker.lib.kotlin.guardedByLock
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 /**
  * Chinese Pinyin suggestion provider backed by the bundled AOSP Google PinyinIME
@@ -44,7 +52,18 @@ class PinyinLanguageProvider(val context: Context) : SuggestionProvider {
 
         // Valid pinyin input characters on the QWERTY layout.
         private val PINYIN_CHARS = "abcdefghijklmnopqrstuvwxyz'".toSet()
+
+        // Compact bundled word list (full-pinyin spelling -> frequency 0-255) used only
+        // by glide typing's statistical classifier to know which pinyin spellings are
+        // "words" worth matching a gesture shape against. This is NOT the Hanzi decoder
+        // dictionary (that's the native libpinyinime dict_pinyin.dat, which has no API to
+        // enumerate all spellings). See app/src/main/assets/ime/dict/pinyin_glide_words.json.
+        private const val GLIDE_WORDS_ASSET_PATH = "ime/dict/pinyin_glide_words.json"
     }
+
+    private val appContext by context.appContext()
+    private val glideWordData = guardedByLock { mutableMapOf<String, Int>() }
+    private val glideWordDataSerializer = MapSerializer(String.serializer(), Int.serializer())
 
     override val providerId = ProviderId
 
@@ -54,6 +73,21 @@ class PinyinLanguageProvider(val context: Context) : SuggestionProvider {
 
     override suspend fun preload(subtype: Subtype) {
         PinyinNativeBridge.preload(context)
+        loadGlideWordData()
+    }
+
+    private suspend fun loadGlideWordData() = withContext(Dispatchers.IO) {
+        glideWordData.withLock { data ->
+            if (data.isEmpty()) {
+                try {
+                    val rawData = appContext.assets.readText(GLIDE_WORDS_ASSET_PATH)
+                    val jsonData = Json.decodeFromString(glideWordDataSerializer, rawData)
+                    data.putAll(jsonData)
+                } catch (e: Exception) {
+                    flogDebug { "Pinyin glide word list load failed: $e" }
+                }
+            }
+        }
     }
 
     override suspend fun suggest(
@@ -95,11 +129,11 @@ class PinyinLanguageProvider(val context: Context) : SuggestionProvider {
     }
 
     override suspend fun getListOfWords(subtype: Subtype): List<String> {
-        return emptyList()
+        return glideWordData.withLock { it.keys.toList() }
     }
 
     override suspend fun getFrequencyForWord(subtype: Subtype, word: String): Double {
-        return 0.0
+        return glideWordData.withLock { it.getOrDefault(word, 0) / 255.0 }
     }
 
     override suspend fun determineLocalComposing(

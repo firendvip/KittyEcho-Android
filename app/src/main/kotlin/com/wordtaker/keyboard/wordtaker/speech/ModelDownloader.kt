@@ -9,10 +9,14 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * Downloads the SenseVoice ASR model into internal storage on first launch, so the
- * APK itself stays small. Two files land in `context.filesDir/sensevoice/`:
- *   - tokens.txt        (~310 KB, downloaded first because it is tiny)
- *   - model.int8.onnx   (~228 MB)
+ * Network fallback for the streaming Zipformer ASR model (the primary path is
+ * [ModelAssetInstaller], which copies the bundled assets — this downloader only
+ * matters if the bundled install somehow failed). Four files land in
+ * `context.filesDir/zipformer-zh/`:
+ *   - tokens.txt          (~19 KB, downloaded first because it is tiny)
+ *   - decoder.int8.onnx   (~1.3 MB)
+ *   - joiner.int8.onnx    (~1.0 MB)
+ *   - encoder.int8.onnx   (~70 MB)
  *
  * Each file streams to a `.part` temp file with progress callbacks, then is renamed
  * to its final name only on full success. Any failure throws and cleans up the
@@ -25,50 +29,70 @@ object ModelDownloader {
 
     private const val TAG = "ModelDownloader"
 
-    const val DIR_NAME = "sensevoice"
-    const val MODEL_NAME = "model.int8.onnx"
+    const val DIR_NAME = "zipformer-zh"
+    const val ENCODER_NAME = "encoder.int8.onnx"
+    const val DECODER_NAME = "decoder.int8.onnx"
+    const val JOINER_NAME = "joiner.int8.onnx"
     const val TOKENS_NAME = "tokens.txt"
 
-    // A valid SenseVoice int8 model is ~228 MB; require >100 MB so a truncated or
-    // bogus file is never treated as "downloaded".
-    private const val MIN_MODEL_BYTES = 100L * 1024L * 1024L
+    // A valid int8 streaming encoder is ~70 MB; require >30 MB so a truncated or
+    // bogus file is never treated as "downloaded". Decoder/joiner are >1 MB each.
+    private const val MIN_ENCODER_BYTES = 30L * 1024L * 1024L
+    private const val MIN_SMALL_ONNX_BYTES = 100L * 1024L
+
+    // Upstream file names inside the sherpa-onnx model repo (renamed locally to the
+    // short canonical names above).
+    private const val UPSTREAM_ENCODER = "encoder-epoch-20-avg-1-chunk-16-left-128.int8.onnx"
+    private const val UPSTREAM_DECODER = "decoder-epoch-20-avg-1-chunk-16-left-128.int8.onnx"
+    private const val UPSTREAM_JOINER = "joiner-epoch-20-avg-1-chunk-16-left-128.int8.onnx"
+    private const val UPSTREAM_TOKENS = "tokens.txt"
 
     // Primary mirror (hf-mirror, China-friendly), then the official Hugging Face host.
     private const val MIRROR_BASE =
-        "https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main"
+        "https://hf-mirror.com/csukuangfj/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12/resolve/main"
     private const val HF_BASE =
-        "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main"
+        "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12/resolve/main"
 
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .followRedirects(true)
             .followSslRedirects(true)
             .connectTimeout(30, TimeUnit.SECONDS)
-            // 228 MB model: a 60s read timeout trips on transient slow-downs. 300s is
+            // 70 MB encoder: a 60s read timeout trips on transient slow-downs. 300s is
             // conservative headroom against network jitter (no resume support yet).
             .readTimeout(300, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .build()
     }
 
-    /** Directory the model lives in: `<filesDir>/sensevoice/`. */
+    /** Directory the model lives in: `<filesDir>/zipformer-zh/`. */
     fun modelDir(context: Context): File = File(context.filesDir, DIR_NAME)
 
-    /** Absolute path to the model file. */
-    fun modelFile(context: Context): File = File(modelDir(context), MODEL_NAME)
+    /** Absolute path to the streaming encoder. */
+    fun encoderFile(context: Context): File = File(modelDir(context), ENCODER_NAME)
+
+    /** Absolute path to the streaming decoder. */
+    fun decoderFile(context: Context): File = File(modelDir(context), DECODER_NAME)
+
+    /** Absolute path to the streaming joiner. */
+    fun joinerFile(context: Context): File = File(modelDir(context), JOINER_NAME)
 
     /** Absolute path to the tokens file. */
     fun tokensFile(context: Context): File = File(modelDir(context), TOKENS_NAME)
 
     /**
-     * True only when both files exist AND the model is plausibly complete
-     * (>100 MB). Exception-safe — any failure reading the filesystem returns false.
+     * True only when all four files exist AND are plausibly complete.
+     * Exception-safe — any failure reading the filesystem returns false.
      */
     fun isDownloaded(context: Context): Boolean {
         return try {
-            val model = modelFile(context)
+            val encoder = encoderFile(context)
+            val decoder = decoderFile(context)
+            val joiner = joinerFile(context)
             val tokens = tokensFile(context)
-            model.exists() && model.length() > MIN_MODEL_BYTES &&
+            encoder.exists() && encoder.length() > MIN_ENCODER_BYTES &&
+                decoder.exists() && decoder.length() > MIN_SMALL_ONNX_BYTES &&
+                joiner.exists() && joiner.length() > MIN_SMALL_ONNX_BYTES &&
                 tokens.exists() && tokens.length() > 0L
         } catch (t: Throwable) {
             Log.e(TAG, "isDownloaded check failed", t)
@@ -77,7 +101,7 @@ object ModelDownloader {
     }
 
     /**
-     * Downloads tokens.txt then model.int8.onnx into internal storage.
+     * Downloads tokens, decoder, joiner, then the big encoder into internal storage.
      *
      * @param onProgress invoked with (downloadedBytes, totalBytes) for the *current*
      *        file; totalBytes is the file's Content-Length, or -1 if unknown.
@@ -90,9 +114,11 @@ object ModelDownloader {
             throw IOException("无法创建模型目录: ${dir.absolutePath}")
         }
 
-        // Small file first so an obvious failure (no network) surfaces fast.
-        downloadFile(TOKENS_NAME, tokensFile(context), onProgress)
-        downloadFile(MODEL_NAME, modelFile(context), onProgress)
+        // Small files first so an obvious failure (no network) surfaces fast.
+        downloadFile(UPSTREAM_TOKENS, tokensFile(context), onProgress)
+        downloadFile(UPSTREAM_DECODER, decoderFile(context), onProgress)
+        downloadFile(UPSTREAM_JOINER, joinerFile(context), onProgress)
+        downloadFile(UPSTREAM_ENCODER, encoderFile(context), onProgress)
     }
 
     /**

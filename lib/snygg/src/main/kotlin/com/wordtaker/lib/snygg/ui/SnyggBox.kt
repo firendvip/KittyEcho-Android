@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -67,6 +68,7 @@ fun SnyggBox(
     supportsBackgroundImage: Boolean = false,
     backgroundImageDescription: String? = null,
     allowClip: Boolean = true,
+    backgroundColorOverride: Color? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     ProvideSnyggStyle(elementName, attributes, selector) { style ->
@@ -85,7 +87,7 @@ fun SnyggBox(
                 .snyggMargin(style)
                 .snyggShadow(style)
                 .snyggBorder(style)
-                .snyggBackground(style, allowClip = allowClip)
+                .snyggBackground(style, allowClip = allowClip, colorOverride = backgroundColorOverride)
                 .then(clickAndSemanticsModifier)
                 .snyggPadding(style),
             contentAlignment = contentAlignment,

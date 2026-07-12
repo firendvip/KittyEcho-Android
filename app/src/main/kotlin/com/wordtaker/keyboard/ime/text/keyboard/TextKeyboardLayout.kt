@@ -21,14 +21,29 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.view.MotionEvent
 import android.view.animation.AccelerateInterpolator
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -45,19 +60,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.addOutline
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.takeOrElse
 import androidx.compose.ui.unit.toSize
 import com.wordtaker.keyboard.FlorisImeService
+import com.wordtaker.keyboard.R
 import com.wordtaker.keyboard.app.FlorisPreferenceStore
 import com.wordtaker.keyboard.editorInstance
 import com.wordtaker.keyboard.glideTypingManager
@@ -86,19 +114,30 @@ import com.wordtaker.keyboard.lib.PointerMap
 import com.wordtaker.keyboard.lib.devtools.LogTopic
 import com.wordtaker.keyboard.lib.devtools.flogDebug
 import com.wordtaker.keyboard.lib.toIntOffset
+import com.wordtaker.keyboard.subtypeManager
 import dev.patrickgold.jetpref.datastore.model.collectAsState
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import com.wordtaker.lib.android.isOrientationLandscape
 import com.wordtaker.lib.compose.DisposableLifecycleEffect
 import com.wordtaker.lib.snygg.SnyggSelector
+import com.wordtaker.lib.snygg.value.SnyggStaticColorValue
 import com.wordtaker.lib.snygg.ui.SnyggBox
 import com.wordtaker.lib.snygg.ui.SnyggIcon
 import com.wordtaker.lib.snygg.ui.SnyggText
 import com.wordtaker.lib.snygg.ui.rememberSnyggThemeQuery
 import kotlin.math.abs
 import kotlin.math.sqrt
+
+// WordTaker: bottom-left collapse chevron sizing (overlay, does not affect key layout).
+// Kept small and pinned to the extreme bottom-left corner so its clickable footprint stays
+// inside the key margin/gap and never covers the tappable body of the "123" key beneath it.
+private const val WT_COLLAPSE_CHEVRON_SIZE_DP = 18
+private const val WT_COLLAPSE_CHEVRON_ICON_DP = 14
+private const val WT_COLLAPSE_CHEVRON_PADDING_DP = 0
 
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @OptIn(ExperimentalComposeUiApi::class)
@@ -114,8 +153,15 @@ fun TextKeyboardLayout(
 
     val keyboard = evaluator.keyboard as TextKeyboard
     val glideEnabledInternal by prefs.glide.enabled.collectAsState()
+    // Glide typing uses a Latin-shaped statistical classifier matched against the active
+    // keyboard's key layout. On the full pinyin qwerty subtype the "words" it matches are
+    // pinyin spellings (see PinyinLanguageProvider's bundled glide word list) which are then
+    // fed into the normal pinyin composing/decoding path -- so it's safe there. On the other
+    // Chinese subtypes (shuangpin/t9/wubi/stroke) the key layout doesn't map to plain a-z
+    // spellings the same way, so glide stays disabled there.
     val glideEnabled = glideEnabledInternal && evaluator.editorInfo.isRichInputEditor &&
-        evaluator.state.keyVariation != KeyVariation.PASSWORD
+        evaluator.state.keyVariation != KeyVariation.PASSWORD &&
+        (evaluator.subtype.primaryLocale.language != "zh" || evaluator.subtype.primaryLocale.variant == "pinyin")
     val glideShowTrail by prefs.glide.showTrail.collectAsState()
     val glideTrailStyle = rememberSnyggThemeQuery(FlorisImeUi.GlideTrail.elementName)
     val glideTrailColor = glideTrailStyle.foreground(default = Color.Green)
@@ -155,8 +201,9 @@ fun TextKeyboardLayout(
         onPause = { resetAllKeys() },
     )
 
+    Box(modifier = modifier) {
     BoxWithConstraints(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
             .height(FlorisImeSizing.keyboardUiHeight())
             .onGloballyPositioned { coords ->
@@ -248,22 +295,35 @@ fun TextKeyboardLayout(
             key1 = keyboard,
             key2 = Unit, // TODO quick'n'dirty hack
             boundsProvider = { key ->
+                // WordTaker (P0-3): detached preview bubble floating ABOVE the key (WeChat/
+                // Gboard style) instead of a tall panel covering the key body.
+                //   width  = key width x 1.4 (but never wider than key width + 2 key heights,
+                //            which keeps bubbles on extra-wide T9 keys compact)
+                //   height = key height x 1.35, bottom edge = key top - 4dp
+                // Bounds are clamped horizontally so edge-column bubbles stay on screen (P2-6).
+                val desired = desiredKeyHack.value.visibleBounds
                 val keyPopupWidth: Float
                 val keyPopupHeight: Float
                 when {
                     configuration.isOrientationLandscape() -> {
-                        keyPopupWidth = desiredKeyHack.value.visibleBounds.width * 1.0f
-                        keyPopupHeight = desiredKeyHack.value.visibleBounds.height * 3.0f
+                        keyPopupWidth = (key.visibleBounds.width * 1.2f)
+                            .coerceAtMost(key.visibleBounds.width + desired.height * 2.0f)
+                        keyPopupHeight = desired.height * 1.35f
                     }
                     else -> {
-                        keyPopupWidth = desiredKeyHack.value.visibleBounds.width * 1.1f
-                        keyPopupHeight = desiredKeyHack.value.visibleBounds.height * 2.5f
+                        keyPopupWidth = (key.visibleBounds.width * 1.4f)
+                            .coerceAtMost(key.visibleBounds.width + desired.height * 2.0f)
+                        keyPopupHeight = desired.height * 1.35f
                     }
                 }
+                val gapToKey = 4.dp.toPx()
                 val keyPopupDiffX = (key.visibleBounds.width - keyPopupWidth) / 2.0f
                 FlorisRect.new().apply {
-                    left = key.visibleBounds.left + keyPopupDiffX
-                    top = key.visibleBounds.bottom - keyPopupHeight
+                    left = (key.visibleBounds.left + keyPopupDiffX)
+                        .coerceIn(0.0f, (keyboardWidth - keyPopupWidth).coerceAtLeast(0.0f))
+                    // NOTE: top may go negative for the top key row — popups intentionally
+                    // render above the keyboard area (over the smartbar), same as before.
+                    top = key.visibleBounds.top - gapToKey - keyPopupHeight
                     right = left + keyPopupWidth
                     bottom = top + keyPopupHeight
                 }
@@ -303,6 +363,30 @@ fun TextKeyboardLayout(
         popupUiController.RenderPopups()
     }
 
+        // WordTaker: WeChat/iOS-style collapse chevron at the bottom-left corner. Tapping it
+        // hides the keyboard window (same call the toolbar collapse button uses). Rendered in the
+        // OUTER Box — outside the keyboard's pointerInteropFilter — so its clickable actually
+        // receives taps, while the function-row keys keep their fixed positions/sizes.
+        if (keyboard.mode == KeyboardMode.CHARACTERS) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(WT_COLLAPSE_CHEVRON_PADDING_DP.dp)
+                    .size(WT_COLLAPSE_CHEVRON_SIZE_DP.dp)
+                    .clickable { FlorisImeService.hideUi() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_wt_collapse),
+                    contentDescription = "收起键盘",
+                    modifier = Modifier.size(WT_COLLAPSE_CHEVRON_ICON_DP.dp),
+                    // P2-303: 深色模式下 #3C4043 在深底上几乎不可见，改为随深浅取色。
+                    tint = if (isSystemInDarkTheme()) Color(0xFFBFC3C7) else Color(0xFF3C4043),
+                )
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         for (event in touchEventChannel) {
             if (!isActive) break
@@ -311,6 +395,37 @@ fun TextKeyboardLayout(
         }
     }
 }
+
+// 中/英 切换键里"未选中"那个字的柔和灰色 (Google 风中性灰 #9AA0A6)。
+private val LANGUAGE_SWITCH_MUTED = Color(0xFF9AA0A6)
+// 中/英 对角双字排布参数：当前态字号略放大、非当前态缩小，两字沿对角错开的位移比例 (相对基准字号)。
+private const val LANGUAGE_SWITCH_ACTIVE_SCALE = 0.92f
+private const val LANGUAGE_SWITCH_MUTED_SCALE = 0.6f
+private const val LANGUAGE_SWITCH_DIAG_FACTOR = 0.34f
+private val LANGUAGE_SWITCH_FALLBACK_SIZE = 22.sp
+
+// WordTaker T9 (P0-1): key labels of the form "2 ABC".."9 WXYZ" render as a split
+// digit (small, top-start) + letter group (large, centered) instead of one clipped line.
+// Case-insensitive: auto_text_key lowercases labels while the keyboard is unshifted.
+private val T9_KEY_LABEL_REGEX = """^(\d) ([A-Za-z]+)$""".toRegex()
+
+// WordTaker (P1-2) press motion constants.
+private const val KEY_RELEASE_COLOR_FADE_MILLIS = 120
+private const val KEY_PRESS_SCALE = 0.96f
+private const val KEY_LABEL_DIM_ALPHA = 0.35f
+private const val KEY_LABEL_DIM_MILLIS = 90
+
+// WordTaker (P1-1 方案2): key-cap bottom edge — a copy of the key shape drawn 1dp lower,
+// underneath the key background, so only a thin dark line peeks out at the bottom.
+// Color comes from the theme's `key-edge` element (absent = no edge, e.g. borderless).
+private const val KEY_EDGE_OFFSET_DP = 1
+
+// WordTaker (P2-3): space bar press ripple — a soft circle expanding from the key center,
+// clipped to the key shape. Expand on press, keep expanding + fade on release.
+private const val SPACE_RIPPLE_ALPHA = 0.12f
+private const val SPACE_RIPPLE_EXPAND_MILLIS = 180
+private const val SPACE_RIPPLE_FADE_MILLIS = 150
+private const val SPACE_RIPPLE_MAX_RADIUS_FACTOR = 0.55f
 
 @Composable
 private fun TextKeyButton(
@@ -332,15 +447,179 @@ private fun TextKeyButton(
     val size = remember(key, desiredKey) {
         key.visibleBounds.size.toDpSize()
     }
+
+    // WordTaker (P1-2): press feedback motion. Press state applies instantly (snap), release
+    // fades pressed -> normal background over 120ms. Keys WITHOUT a preview popup (space,
+    // enter, shift, delete, view switchers, ...) additionally get a subtle 0.96 press-down
+    // scale with a spring release. Only transform/color are animated — no relayout.
+    val prefs by FlorisPreferenceStore
+    val popupEnabled by prefs.keyboard.popupEnabled.collectAsState()
+    val keyCode = key.computedData.code
+    val keyboardMode = evaluator.keyboard.mode
+    val isNumericMode = keyboardMode == KeyboardMode.NUMERIC ||
+        keyboardMode == KeyboardMode.PHONE || keyboardMode == KeyboardMode.PHONE2 ||
+        (keyboardMode == KeyboardMode.NUMERIC_ADVANCED && key.computedData.type == KeyType.NUMERIC)
+    val hasPopupPreview = popupEnabled && keyCode > KeyCode.SPACE &&
+        keyCode != KeyCode.CJK_SPACE && !isNumericMode
+    val restStyle = rememberSnyggThemeQuery(FlorisImeUi.Key.elementName, attributes, SnyggSelector.NONE)
+    val pressedStyle = rememberSnyggThemeQuery(FlorisImeUi.Key.elementName, attributes, SnyggSelector.PRESSED)
+    val restBg = (restStyle.background as? SnyggStaticColorValue)?.color
+    val pressedBg = (pressedStyle.background as? SnyggStaticColorValue)?.color
+    val hasStaticBg = restBg != null && pressedBg != null && key.isEnabled
+    val animatedBgState = animateColorAsState(
+        targetValue = when {
+            !hasStaticBg -> Color.Transparent
+            key.isPressed -> pressedBg!!
+            else -> restBg!!
+        },
+        animationSpec = if (key.isPressed) {
+            snap()
+        } else {
+            tween(durationMillis = KEY_RELEASE_COLOR_FADE_MILLIS, easing = FastOutSlowInEasing)
+        },
+        label = "keyBackground",
+    )
+    val pressScale by animateFloatAsState(
+        targetValue = if (key.isPressed && !hasPopupPreview && key.isEnabled) KEY_PRESS_SCALE else 1.0f,
+        animationSpec = spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow),
+        label = "keyPressScale",
+    )
+    // WordTaker (P2-4): while the preview bubble is up, dim the key's own label so the eye
+    // focuses on the bubble (WeChat behavior).
+    val labelAlpha by animateFloatAsState(
+        targetValue = if (key.isPressed && hasPopupPreview) KEY_LABEL_DIM_ALPHA else 1.0f,
+        animationSpec = tween(durationMillis = KEY_LABEL_DIM_MILLIS, easing = FastOutSlowInEasing),
+        label = "keyLabelAlpha",
+    )
+    // WordTaker (P1-1 方案2): resolve the theme's key-edge color (bottom dark edge). Rest
+    // selector on purpose — the edge is part of the cap's static depth, not a press state.
+    val keyEdgeStyle = rememberSnyggThemeQuery(FlorisImeUi.KeyEdge.elementName, attributes, SnyggSelector.NONE)
+    val keyEdgeColor = keyEdgeStyle.background()
+    val keyShape = restStyle.shape()
+    val drawKeyEdge = key.isEnabled && keyEdgeColor.isSpecified && keyEdgeColor.alpha > 0.0f && hasStaticBg
+    // WordTaker (P2-3): space bar press ripple state.
+    val isSpaceBar = keyCode == KeyCode.SPACE || keyCode == KeyCode.CJK_SPACE
+    val rippleRadius = remember { Animatable(0.0f) }
+    val rippleAlpha = remember { Animatable(0.0f) }
+    if (isSpaceBar) {
+        LaunchedEffect(key.isPressed) {
+            if (key.isPressed) {
+                rippleRadius.snapTo(0.0f)
+                rippleAlpha.snapTo(SPACE_RIPPLE_ALPHA)
+                rippleRadius.animateTo(
+                    targetValue = 1.0f,
+                    animationSpec = tween(SPACE_RIPPLE_EXPAND_MILLIS, easing = FastOutSlowInEasing),
+                )
+            } else if (rippleAlpha.value > 0.0f) {
+                // Release: let the wave finish expanding while it fades out.
+                coroutineScope {
+                    launch {
+                        rippleRadius.animateTo(
+                            targetValue = 1.0f,
+                            animationSpec = tween(SPACE_RIPPLE_FADE_MILLIS, easing = FastOutSlowInEasing),
+                        )
+                    }
+                    rippleAlpha.animateTo(
+                        targetValue = 0.0f,
+                        animationSpec = tween(SPACE_RIPPLE_FADE_MILLIS, easing = FastOutSlowInEasing),
+                    )
+                }
+                rippleRadius.snapTo(0.0f)
+            }
+        }
+    }
+    val spaceRippleColor = restStyle.foreground(default = Color.Unspecified)
+
     SnyggBox(
         FlorisImeUi.Key.elementName,
         attributes = attributes,
         selector = selector,
         modifier = Modifier
             .requiredSize(size)
-            .absoluteOffset { key.visibleBounds.topLeft.toIntOffset() },
+            .absoluteOffset { key.visibleBounds.topLeft.toIntOffset() }
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+            }
+            // WordTaker (P1-1 方案2): paint the bottom edge BEFORE the key background (outer
+            // draw modifiers render underneath), so only a 1dp dark line shows below the cap.
+            .drawBehind {
+                if (drawKeyEdge) {
+                    val outline = keyShape.createOutline(this.size, layoutDirection, this)
+                    translate(top = KEY_EDGE_OFFSET_DP.dp.toPx()) {
+                        drawOutline(outline, keyEdgeColor)
+                    }
+                }
+            },
+        backgroundColorOverride = if (hasStaticBg) animatedBgState.value else null,
     ) {
+        // WordTaker (P2-3): space bar ripple layer — under the label, clipped to the key shape.
+        if (isSpaceBar && spaceRippleColor.isSpecified) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .drawBehind {
+                        val alpha = rippleAlpha.value
+                        if (alpha > 0.0f) {
+                            val outline = keyShape.createOutline(this.size, layoutDirection, this)
+                            clipPath(Path().apply { addOutline(outline) }) {
+                                drawCircle(
+                                    color = spaceRippleColor,
+                                    radius = rippleRadius.value * this.size.maxDimension * SPACE_RIPPLE_MAX_RADIUS_FACTOR,
+                                    alpha = alpha,
+                                )
+                            }
+                        }
+                    },
+            )
+        }
         val isTelPadKey = key.computedData.type == KeyType.NUMERIC && evaluator.keyboard.mode == KeyboardMode.PHONE
+        // WordTaker 中/英 切换键: 同时显示 "中" 与 "英" 两字，当前输入模式的字用键的正常前景色高亮，
+        // 另一个字用柔和灰色淡化。SnyggText 只能整体一个颜色，无法逐字上色，故此键单独用
+        // AnnotatedString + Material3 Text 渲染 (字号/字体/字重仍取自 Key 的 Snygg 样式，保持一致)。
+        // 切换行为不变 (仍走 KeyCode.LANGUAGE_SWITCH)，这里只改视觉标签。
+        if (key.computedData.code == KeyCode.LANGUAGE_SWITCH) {
+            val keyStyle = rememberSnyggThemeQuery(FlorisImeUi.Key.elementName, attributes, selector)
+            val activeColor = keyStyle.foreground(default = LocalContentColor.current)
+            val isEnglish = evaluator.state.isEnglishMode
+            // 「中」「英」对角分布同显：当前输入模式的字用正常前景色、稍大字号高亮，
+            // 另一字用柔和灰、略小字号淡化，斜向错开排布 (中↖ / 英↘)，两字均完整不裁切、不换行。
+            // keyStyle.fontSize() 可能为 Unspecified，需回退到具体字号，否则 *Float 得 NaN。
+            val baseSize = keyStyle.fontSize()
+                .takeOrElse { keyStyle.lineHeight() }
+                .takeOrElse { LANGUAGE_SWITCH_FALLBACK_SIZE }
+            val activeSize = baseSize * LANGUAGE_SWITCH_ACTIVE_SCALE
+            val mutedSize = baseSize * LANGUAGE_SWITCH_MUTED_SCALE
+            val diag = with(LocalDensity.current) { baseSize.toPx().toDp() * LANGUAGE_SWITCH_DIAG_FACTOR }
+            Box(
+                modifier = Modifier
+                    .wrapContentSize()
+                    .align(Alignment.Center),
+            ) {
+                Text(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .absoluteOffset(x = -diag, y = -diag),
+                    text = "中",
+                    color = if (isEnglish) LANGUAGE_SWITCH_MUTED else activeColor,
+                    fontSize = if (isEnglish) mutedSize else activeSize,
+                    fontStyle = keyStyle.fontStyle(),
+                    fontWeight = keyStyle.fontWeight(),
+                    letterSpacing = keyStyle.letterSpacing(),
+                )
+                Text(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .absoluteOffset(x = diag, y = diag),
+                    text = "英",
+                    color = if (isEnglish) activeColor else LANGUAGE_SWITCH_MUTED,
+                    fontSize = if (isEnglish) activeSize else mutedSize,
+                    fontStyle = keyStyle.fontStyle(),
+                    fontWeight = keyStyle.fontWeight(),
+                    letterSpacing = keyStyle.letterSpacing(),
+                )
+            }
+        } else {
         key.label?.let { label ->
             var customLabel = label
             if (key.computedData.code == KeyCode.SPACE) {
@@ -360,21 +639,61 @@ private fun TextKeyButton(
                 // pinyin decoder (which lowercases composing text) is unaffected.
                 customLabel = customLabel.uppercase()
             }
-            SnyggText(
-                modifier = Modifier
-                    .wrapContentSize()
-                    .align(if (isTelPadKey) BiasAlignment(-0.5f, 0f) else Alignment.Center),
-                text = customLabel,
-            )
+            // WordTaker T9 (P0-1): split "2 ABC" into letter group (main visual, centered)
+            // + digit (small, top-start), WeChat/Sogou style. Data (label/code) is unchanged.
+            val t9Match = if (keyboardMode == KeyboardMode.CHARACTERS) {
+                T9_KEY_LABEL_REGEX.matchEntire(customLabel)
+            } else {
+                null
+            }
+            if (t9Match != null) {
+                SnyggText(
+                    elementName = FlorisImeUi.KeyT9Letters.elementName,
+                    attributes = attributes,
+                    selector = selector,
+                    modifier = Modifier
+                        .wrapContentSize()
+                        .align(Alignment.Center)
+                        .graphicsLayer { alpha = labelAlpha },
+                    text = t9Match.groupValues[2].uppercase(),
+                )
+                SnyggText(
+                    elementName = FlorisImeUi.KeyT9Digit.elementName,
+                    attributes = attributes,
+                    selector = selector,
+                    modifier = Modifier
+                        .wrapContentSize()
+                        .align(Alignment.TopStart)
+                        .graphicsLayer { alpha = labelAlpha },
+                    text = t9Match.groupValues[1],
+                )
+            } else {
+                SnyggText(
+                    modifier = Modifier
+                        .wrapContentSize()
+                        .align(if (isTelPadKey) BiasAlignment(-0.5f, 0f) else Alignment.Center)
+                        .graphicsLayer { alpha = labelAlpha },
+                    text = customLabel,
+                )
+            }
         }
+        } // end else (non language-switch label rendering)
         key.hintedLabel?.let { hintedLabel ->
+            // WordTaker: on the 全拼 QWERTY the per-letter number/symbol hint sits centered ABOVE
+            // the letter (WeChat/iOS pinyin style, matching the reference). The phone T9 pad keeps
+            // its top-right hint; other layouts keep the Gboard-style top-end position.
+            val hintAlignment = when {
+                isTelPadKey -> BiasAlignment(0.5f, 0f)
+                keyboardMode == KeyboardMode.CHARACTERS -> Alignment.TopCenter
+                else -> Alignment.TopEnd
+            }
             SnyggText(
                 elementName = FlorisImeUi.KeyHint.elementName,
                 attributes = attributes,
                 selector = selector,
                 modifier = Modifier
                     .wrapContentSize()
-                    .align(if (isTelPadKey) BiasAlignment(0.5f, 0f) else Alignment.TopEnd),
+                    .align(hintAlignment),
                 text = hintedLabel,
             )
         }
@@ -403,6 +722,7 @@ private class TextKeyboardLayoutController(
     private val prefs by FlorisPreferenceStore
     private val editorInstance by context.editorInstance()
     private val keyboardManager by context.keyboardManager()
+    private val subtypeManager by context.subtypeManager()
 
     private val inputEventDispatcher get() = keyboardManager.inputEventDispatcher
     private val inputFeedbackController get() = FlorisImeService.inputFeedbackController()
@@ -424,7 +744,9 @@ private class TextKeyboardLayoutController(
     var size = Size.Zero
 
     val isGlideEnabled: Boolean get() = prefs.glide.enabled.get() && editorInstance.activeInfo.isRichInputEditor &&
-        keyboardManager.activeState.keyVariation != KeyVariation.PASSWORD
+        keyboardManager.activeState.keyVariation != KeyVariation.PASSWORD &&
+        (subtypeManager.activeSubtype.primaryLocale.language != "zh" ||
+            subtypeManager.activeSubtype.primaryLocale.variant == "pinyin")
 
     fun onTouchEventInternal(event: MotionEvent) {
         flogDebug { "event=$event" }
