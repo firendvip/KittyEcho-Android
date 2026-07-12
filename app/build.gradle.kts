@@ -17,6 +17,7 @@
 import com.android.build.api.dsl.ApplicationExtension
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.agp.application)
@@ -26,6 +27,13 @@ plugins {
     alias(libs.plugins.mikepenz.aboutlibraries)
     alias(libs.plugins.kotest)
     alias(libs.plugins.kotlinx.kover)
+}
+
+// Release 签名凭据从 gitignored keystore.properties 读取（不再硬编码于本文件）。
+// 缺该文件时 release 签名会失败（debug/单测不受影响）；备份见 CAT MAC/_keystore_backup/。
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
 }
 
 val projectMinSdk: String by project
@@ -136,10 +144,10 @@ configure<ApplicationExtension> {
 
     signingConfigs {
         create("release") {
-            storeFile = file("wordtaker-release.jks")
-            storePassword = "wordtaker2026"
-            keyAlias = "wordtaker"
-            keyPassword = "wordtaker2026"
+            storeFile = file(keystoreProps.getProperty("storeFile") ?: "wordtaker-release.jks")
+            storePassword = keystoreProps.getProperty("storePassword")
+            keyAlias = keystoreProps.getProperty("keyAlias")
+            keyPassword = keystoreProps.getProperty("keyPassword")
         }
     }
 
