@@ -2,6 +2,7 @@ package com.wordtaker.keyboard.wordtaker.toolbar
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -140,32 +142,26 @@ fun ToolbarCatButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // item4: 同 ToolbarIconButton，改用 Box 避免 IconButton 最小触控目标放大白圈。
+    // batch3-A: 去白圈 —— 只留猫头图形 (ic_brand_cat_bare，无白色圆角矩形底)，深浅色同。
+    // 外层 44dp 透明 Box 保证触控目标 ≥44dp；indication=null 避免焦点/水波纹在无底钮上
+    // 显示成灰色方块。猫头直径 ≈ 0.62x38 ≈ 24dp，与原白圈时代的视觉尺寸持平。
+    val noRipple = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
-            .size(WT_TOOLBAR_CAT_BUTTON_SIZE_DP.dp)
-            .clip(CircleShape)
-            // P2-303: 深色模式用深色圆底（猫头自身彩色不变）。
-            .background(
-                if (isSystemInDarkTheme()) WT_TOOLBAR_CIRCLE_DARK else Color.White,
-            )
-            .clickable(onClick = onClick),
+            .size(WT_TOOLBAR_CAT_TOUCH_SIZE_DP.dp)
+            .clickable(
+                interactionSource = noRipple,
+                indication = null,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            painter = painterResource(R.drawable.ic_brand_cat),
+            painter = painterResource(R.drawable.ic_brand_cat_bare),
             contentDescription = contentDescription,
-            // No tint: keep the cat's own colours. item4: 白圈只比猫头图形大 ~4-5dp ——
-            // 猫头在 100 视口里约占 66%，把矢量放大 WT_TOOLBAR_CAT_GLYPH_SCALE 倍后
-            // 猫头直径 ≈ 0.66×1.25×25 ≈ 21dp，白圈 25dp，即「头像直径 + 约4dp」。
-            // 超出部分被外层 CircleShape clip 裁掉（只裁到装饰性边角，猫头不裁）。
+            // No tint: keep the cat's own colours.
             tint = Color.Unspecified,
-            modifier = Modifier
-                .size(WT_TOOLBAR_CAT_BUTTON_SIZE_DP.dp)
-                .graphicsLayer {
-                    scaleX = WT_TOOLBAR_CAT_GLYPH_SCALE
-                    scaleY = WT_TOOLBAR_CAT_GLYPH_SCALE
-                },
+            modifier = Modifier.size(WT_TOOLBAR_CAT_GLYPH_SIZE_DP.dp),
         )
     }
 }
@@ -179,7 +175,8 @@ const val TOOLBAR_HEIGHT_DP = 44
 // item8: 白色圆底"抱紧"图标 —— 圆只比图标大 6dp (26 vs 20)，与顶条圆钮尺寸一致。
 const val WT_TOOLBAR_BUTTON_SIZE_DP = 26
 const val WT_TOOLBAR_ICON_SIZE_DP = 20
-// item4: 小猫头像白圈 —— 25dp 圆 + 矢量放大 1.25 倍，白圈 ≈ 猫头直径 + 4dp。
-const val WT_TOOLBAR_CAT_BUTTON_SIZE_DP = 25
-const val WT_TOOLBAR_CAT_GLYPH_SCALE = 1.25f
+// batch3-A: 小猫头像去白圈 —— 44dp 不可见触控区 + 38dp 无底猫头矢量
+// (头部占视口 ~62%，猫头直径 ≈ 24dp，补偿去圈后的视觉变小)。
+const val WT_TOOLBAR_CAT_TOUCH_SIZE_DP = 44
+const val WT_TOOLBAR_CAT_GLYPH_SIZE_DP = 38
 private const val BUTTON_GAP_DP = 10

@@ -31,11 +31,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.Image
 import androidx.compose.material.icons.Icons
@@ -77,6 +81,7 @@ import com.wordtaker.keyboard.wordtaker.ui.ROLE_GAOEQ
 import com.wordtaker.keyboard.wordtaker.ui.ROLE_NORMAL
 import com.wordtaker.keyboard.wordtaker.ui.ROLE_VIBECODING
 import com.wordtaker.lib.compose.FlorisCanvasIcon
+import com.wordtaker.lib.compose.florisScrollbar
 import dev.patrickgold.jetpref.datastore.model.observeAsState
 import kotlinx.coroutines.launch
 
@@ -108,6 +113,15 @@ private fun MinimalSettingsMain(onOpenAccount: () -> Unit) = FlorisScreen {
     title = "弦外小猫"
     navigationIconVisible = false
     previewFieldVisible = false
+    // P0 fix: this screen previously rendered as one plain `Column` inside
+    // `Modifier.verticalScroll()`, which forces Compose to measure/layout/draw every
+    // section — including the off-screen About block's image — on every single scroll
+    // frame (confirmed via ANR trace draw call stack: NodeCoordinator.draw walking the
+    // full tree during a scroll fling). A `LazyColumn` only composes/draws the rows that
+    // are actually visible, which removes that main-thread per-frame cost. `scrollable`
+    // must be turned off here so the outer FlorisScreen wrapper doesn't also apply its
+    // own `Modifier.verticalScroll()` (that would nest two vertical scrollables).
+    scrollable = false
 
     val repo = AppGraph.settingsRepository
 
@@ -116,6 +130,8 @@ private fun MinimalSettingsMain(onOpenAccount: () -> Unit) = FlorisScreen {
         val state by repo.settings.collectAsState(initial = SettingsState())
         val prefs by FlorisPreferenceStore
         val keyboardStyle by prefs.internal.selectedKeyboardStyle.observeAsState()
+        val cloudEnabled by prefs.cloudDictionary.cloudEnabled.observeAsState()
+        val lazyListState = rememberLazyListState()
 
         // item6: 整体配色对齐微信「+」面板 —— 页面浅灰底 + 分组白卡，干净统一。
         // 内容/功能完全不变，仅调背景与卡片观感。深色模式协调深灰。
@@ -123,116 +139,127 @@ private fun MinimalSettingsMain(onOpenAccount: () -> Unit) = FlorisScreen {
         val pageBg = if (dark) Color(0xFF1C1D1F) else Color(0xFFF2F3F5)
         val cardBg = if (dark) Color(0xFF2A2B2E) else Color.White
 
-        Column(
+        LazyColumn(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .background(pageBg)
-                .padding(horizontal = 16.dp),
+                .florisScrollbar(lazyListState, isVertical = true),
+            state = lazyListState,
+            contentPadding = PaddingValues(horizontal = 16.dp),
         ) {
             // Brand header
-            BrandHeader()
+            item { BrandHeader() }
 
-            Spacer(Modifier.height(8.dp))
+            item { Spacer(Modifier.height(8.dp)) }
 
             // 启用 / 切换 / 麦克风授权 entries on the home page (#6).
-            SettingsCard(cardBg) {
-                SetupEntriesSection()
+            item {
+                SettingsCard(cardBg) {
+                    SetupEntriesSection()
+                }
             }
 
-            Spacer(Modifier.height(20.dp))
+            item { Spacer(Modifier.height(20.dp)) }
 
             // item6: 账户与额度 —— 同窗口子页入口（不再跳独立 Activity）。
-            SectionLabel("账户")
-            SettingsCard(cardBg) {
-                AccountEntryRow(onClick = onOpenAccount)
+            item {
+                SectionLabel("账户")
+                SettingsCard(cardBg) {
+                    AccountEntryRow(onClick = onOpenAccount)
+                }
             }
 
-            Spacer(Modifier.height(20.dp))
+            item { Spacer(Modifier.height(20.dp)) }
 
             // AI role
-            SectionLabel("AI 角色")
-            SettingsCard(cardBg) {
-                SelectableRow(
-                    title = "常规",
-                    subtitle = "将你的话改写得通顺、自然、规范",
-                    selected = state.role == ROLE_NORMAL,
-                    onClick = { scope.launch { repo.setRole(ROLE_NORMAL) } },
-                )
-                Spacer(Modifier.height(4.dp))
-                SelectableRow(
-                    title = "高情商改写",
-                    subtitle = "将你的话改写成得体、有温度的高情商表达",
-                    selected = state.role == ROLE_GAOEQ,
-                    onClick = { scope.launch { repo.setRole(ROLE_GAOEQ) } },
-                )
-                Spacer(Modifier.height(4.dp))
-                SelectableRow(
-                    title = "VibeCoding专用",
-                    subtitle = "将你的话改写成让AI更能看懂的语言",
-                    selected = state.role == ROLE_VIBECODING,
-                    onClick = { scope.launch { repo.setRole(ROLE_VIBECODING) } },
-                )
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            // Tone + 云词库联想 — grouped in one card (both are typing-behaviour toggles).
-            val cloudEnabled by prefs.cloudDictionary.cloudEnabled.observeAsState()
-            SettingsCard(cardBg) {
-                ToggleRow(
-                    title = "提示音",
-                    checked = state.tone,
-                    onCheckedChange = { scope.launch { repo.setTone(it) } },
-                )
-                if (state.tone) {
-                    ToneVolumeRow(
-                        volume = state.toneVolume,
-                        onVolumeChangeFinished = { scope.launch { repo.setToneVolume(it) } },
+            item {
+                SectionLabel("AI 角色")
+                SettingsCard(cardBg) {
+                    SelectableRow(
+                        title = "常规",
+                        subtitle = "将你的话改写得通顺、自然、规范",
+                        selected = state.role == ROLE_NORMAL,
+                        onClick = { scope.launch { repo.setRole(ROLE_NORMAL) } },
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    SelectableRow(
+                        title = "高情商改写",
+                        subtitle = "将你的话改写成得体、有温度的高情商表达",
+                        selected = state.role == ROLE_GAOEQ,
+                        onClick = { scope.launch { repo.setRole(ROLE_GAOEQ) } },
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    SelectableRow(
+                        title = "VibeCoding专用",
+                        subtitle = "将你的话改写成让AI更能看懂的语言",
+                        selected = state.role == ROLE_VIBECODING,
+                        onClick = { scope.launch { repo.setRole(ROLE_VIBECODING) } },
                     )
                 }
-                ToggleRow(
-                    title = "云词库联想",
-                    subtitle = "打拼音时联网补充更多候选词，只上传拼音，不上传输入内容",
-                    checked = cloudEnabled,
-                    onCheckedChange = { scope.launch { prefs.cloudDictionary.cloudEnabled.set(it) } },
-                )
+            }
+
+            item { Spacer(Modifier.height(20.dp)) }
+
+            // Tone + 云词库联想 — grouped in one card (both are typing-behaviour toggles).
+            item {
+                SettingsCard(cardBg) {
+                    ToggleRow(
+                        title = "提示音",
+                        checked = state.tone,
+                        onCheckedChange = { scope.launch { repo.setTone(it) } },
+                    )
+                    if (state.tone) {
+                        ToneVolumeRow(
+                            volume = state.toneVolume,
+                            onVolumeChangeFinished = { scope.launch { repo.setToneVolume(it) } },
+                        )
+                    }
+                    ToggleRow(
+                        title = "云词库联想",
+                        subtitle = "打拼音时联网补充更多候选词，只上传拼音，不上传输入内容",
+                        checked = cloudEnabled,
+                        onCheckedChange = { scope.launch { prefs.cloudDictionary.cloudEnabled.set(it) } },
+                    )
+                }
             }
 
             // #17 极简模式 hidden / #18 皮肤 hidden — minimal stays default false underneath.
 
-            Spacer(Modifier.height(20.dp))
+            item { Spacer(Modifier.height(20.dp)) }
 
             // 键盘管理 — two side-by-side mini preview cards (全拼 / 九宫格), same style as the
             // onboarding step-1 cards, shrunk to fit phones side by side. Tap to switch (#4).
-            SectionLabel("键盘管理")
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    KeyboardManageCard(
-                        name = "全拼",
-                        kind = MiniPreviewKind.QWERTY,
-                        selected = keyboardStyle == KEYBOARD_STYLE_QWERTY,
-                        onClick = { scope.launch { prefs.internal.selectedKeyboardStyle.set(KEYBOARD_STYLE_QWERTY) } },
-                    )
-                }
-                Box(modifier = Modifier.weight(1f)) {
-                    KeyboardManageCard(
-                        name = "九宫格",
-                        kind = MiniPreviewKind.GRID,
-                        selected = keyboardStyle == KEYBOARD_STYLE_T9,
-                        onClick = { scope.launch { prefs.internal.selectedKeyboardStyle.set(KEYBOARD_STYLE_T9) } },
-                    )
+            item {
+                SectionLabel("键盘管理")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        KeyboardManageCard(
+                            name = "全拼",
+                            kind = MiniPreviewKind.QWERTY,
+                            selected = keyboardStyle == KEYBOARD_STYLE_QWERTY,
+                            onClick = { scope.launch { prefs.internal.selectedKeyboardStyle.set(KEYBOARD_STYLE_QWERTY) } },
+                        )
+                    }
+                    Box(modifier = Modifier.weight(1f)) {
+                        KeyboardManageCard(
+                            name = "九宫格",
+                            kind = MiniPreviewKind.GRID,
+                            selected = keyboardStyle == KEYBOARD_STYLE_T9,
+                            onClick = { scope.launch { prefs.internal.selectedKeyboardStyle.set(KEYBOARD_STYLE_T9) } },
+                        )
+                    }
                 }
             }
 
-            Spacer(Modifier.height(28.dp))
+            item { Spacer(Modifier.height(28.dp)) }
 
             // About — redesigned (#19/#20)
-            AboutSection()
+            item { AboutSection() }
 
-            Spacer(Modifier.height(24.dp))
+            item { Spacer(Modifier.height(24.dp)) }
         }
     }
 }

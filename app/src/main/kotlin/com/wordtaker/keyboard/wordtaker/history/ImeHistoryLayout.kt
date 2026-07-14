@@ -39,7 +39,7 @@ import com.wordtaker.keyboard.editorInstance
 import com.wordtaker.keyboard.ime.keyboard.FlorisImeSizing
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.toolbar.TOOLBAR_HEIGHT_DP
-import com.wordtaker.keyboard.wordtaker.voice.CAT_STRIP_HEIGHT_DP
+import com.wordtaker.keyboard.wordtaker.voice.catStripHeight
 import com.wordtaker.keyboard.wordtaker.ui.WeChatPalette
 import com.wordtaker.keyboard.wordtaker.ui.fmtTime
 import com.wordtaker.keyboard.wordtaker.ui.rememberWeChatPalette
@@ -75,10 +75,10 @@ fun ImeHistoryLayout(modifier: Modifier = Modifier) {
     // #13: clearing all history requires a second confirmation to prevent accidental wipes.
     var showClearConfirm by remember { mutableStateOf(false) }
 
-    // item3: 与设置面板同规则 —— 面板高 = keyboardUiHeight + (顶条59 - 工具栏44)，
-    // 使 历史态总高 == 键盘态总高，切换零跳动。
+    // item3: 与设置面板同规则 —— 面板高 = keyboardUiHeight + (顶条 - 工具栏44)，
+    // 使 历史态总高 == 键盘态总高，切换零跳动。(batch3-A: 顶条已按屏宽比例化)
     val panelHeight = FlorisImeSizing.keyboardUiHeight() +
-        (CAT_STRIP_HEIGHT_DP - TOOLBAR_HEIGHT_DP).dp
+        (catStripHeight() - TOOLBAR_HEIGHT_DP.dp)
 
     Box(
         modifier = modifier

@@ -146,6 +146,8 @@ class TextKey(override val data: AbstractKeyData) : Key(data) {
                 }
                 else -> when (computed.code) {
                     KeyCode.SPACE, KeyCode.CJK_SPACE -> 1.0f
+                    // WordTaker 符号页 category tabs share leftover row width evenly.
+                    in KeyCode.SYM2_CAT_CIRCLED..KeyCode.SYM2_CAT_RECENT -> 1.0f
                     else -> 0.0f
                 }
             }

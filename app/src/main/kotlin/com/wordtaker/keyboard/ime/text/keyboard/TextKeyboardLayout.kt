@@ -103,6 +103,7 @@ import com.wordtaker.keyboard.ime.text.gestures.GlideTypingGesture
 import com.wordtaker.keyboard.ime.text.gestures.SwipeAction
 import com.wordtaker.keyboard.ime.text.gestures.SwipeGesture
 import com.wordtaker.keyboard.ime.text.key.KeyCode
+import com.wordtaker.keyboard.wordtaker.symbols.Symbols2State
 import com.wordtaker.keyboard.ime.text.key.KeyType
 import com.wordtaker.keyboard.ime.text.key.KeyVariation
 import com.wordtaker.keyboard.ime.theme.FlorisImeUi
@@ -439,9 +440,16 @@ private fun TextKeyButton(
         FlorisImeUi.Attr.Mode to evaluator.keyboard.mode.toString(),
         FlorisImeUi.Attr.ShiftState to evaluator.state.inputShiftState.toString(),
     )
+    // WordTaker 符号页: the selected category tab renders in the FOCUS state so the theme
+    // can highlight it (see `key[code=...]:focus` rules in the stylesheets).
+    val sym2Category by Symbols2State.categoryFlow.collectAsState()
+    val isSelectedSym2Tab = evaluator.keyboard.mode == KeyboardMode.SYMBOLS2 &&
+        key.computedData.code in KeyCode.SYM2_CAT_CIRCLED..KeyCode.SYM2_CAT_RECENT &&
+        sym2Category.keyCode == key.computedData.code
     val selector = when {
         !key.isEnabled -> SnyggSelector.DISABLED
         key.isPressed -> SnyggSelector.PRESSED
+        isSelectedSym2Tab -> SnyggSelector.FOCUS
         else -> SnyggSelector.NONE
     }
     val size = remember(key, desiredKey) {
@@ -463,13 +471,17 @@ private fun TextKeyButton(
         keyCode != KeyCode.CJK_SPACE && !isNumericMode
     val restStyle = rememberSnyggThemeQuery(FlorisImeUi.Key.elementName, attributes, SnyggSelector.NONE)
     val pressedStyle = rememberSnyggThemeQuery(FlorisImeUi.Key.elementName, attributes, SnyggSelector.PRESSED)
+    val focusStyle = rememberSnyggThemeQuery(FlorisImeUi.Key.elementName, attributes, SnyggSelector.FOCUS)
     val restBg = (restStyle.background as? SnyggStaticColorValue)?.color
     val pressedBg = (pressedStyle.background as? SnyggStaticColorValue)?.color
+    val focusBg = (focusStyle.background as? SnyggStaticColorValue)?.color
     val hasStaticBg = restBg != null && pressedBg != null && key.isEnabled
     val animatedBgState = animateColorAsState(
         targetValue = when {
             !hasStaticBg -> Color.Transparent
             key.isPressed -> pressedBg!!
+            // WordTaker 符号页: selected category tab keeps its focus-state background.
+            isSelectedSym2Tab -> focusBg ?: restBg!!
             else -> restBg!!
         },
         animationSpec = if (key.isPressed) {

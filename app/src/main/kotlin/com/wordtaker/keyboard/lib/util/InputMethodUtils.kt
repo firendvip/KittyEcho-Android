@@ -30,7 +30,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.wordtaker.keyboard.BuildConfig
 import com.wordtaker.keyboard.lib.devtools.flogDebug
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import com.wordtaker.lib.android.AndroidSettings
 import com.wordtaker.lib.android.AndroidVersion
 import com.wordtaker.lib.android.systemServiceOrNull
@@ -129,6 +131,15 @@ object InputMethodUtils {
         }
     }
 
+    // P0 fix: isFlorisboardEnabled/Selected() do a synchronous Binder call into
+    // InputMethodManagerService. Previously this ran directly on the main-thread
+    // LaunchedEffect loop (Dispatchers.Main.immediate) every 500ms for as long as the
+    // settings screen was open; if system_server/IMMS was briefly slow, that single
+    // blocking IPC call stalled the whole main Looper (Compose frame processing +
+    // touch dispatch), which is exactly the class of "Input dispatching timed out …
+    // Waited Xms for FocusEvent" ANR seen on the settings screen. Move the polling
+    // call itself to Dispatchers.IO so the main thread is only ever touched to publish
+    // the resulting boolean.
     @RequiresApi(api = 34)
     @Composable
     private fun timedObserveIsFlorisBoardEnabled(): State<Boolean> {
@@ -136,7 +147,7 @@ object InputMethodUtils {
         val context = LocalContext.current
         LaunchedEffect(Unit) {
             while (true) {
-                state.value = isFlorisboardEnabled(context)
+                state.value = withContext(Dispatchers.IO) { isFlorisboardEnabled(context) }
                 delay(TIMED_QUERY_DELAY)
             }
         }
@@ -150,7 +161,7 @@ object InputMethodUtils {
         val context = LocalContext.current
         LaunchedEffect(Unit) {
             while (true) {
-                state.value = isFlorisboardSelected(context)
+                state.value = withContext(Dispatchers.IO) { isFlorisboardSelected(context) }
                 delay(TIMED_QUERY_DELAY)
             }
         }

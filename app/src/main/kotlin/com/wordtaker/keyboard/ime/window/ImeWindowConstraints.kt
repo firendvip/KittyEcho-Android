@@ -26,6 +26,20 @@ import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.width
 
+// WordTaker (batch3-A): 手机竖屏所有尺寸按【实际屏幕宽度】比例计算，任何设备/密度下
+// 键盘占屏比例 1:1 —— 不再依赖 395x875 基准屏的固定 dp。
+// 行距 = 0.1485x屏宽 (参考图量化)；默认键盘高(4行) = 0.594x屏宽。
+private const val WT_ROW_HEIGHT_RATIO = 0.1485f
+private const val WT_DEF_KEYBOARD_HEIGHT_RATIO = WT_ROW_HEIGHT_RATIO * 4f
+private const val WT_MIN_KEYBOARD_HEIGHT_RATIO = 0.34f
+private const val WT_MAX_KEYBOARD_HEIGHT_RATIO = 0.97f
+// 键距 (原 3dp / 4.5dp @ 395dp 基准屏) 同样比例化。
+private const val WT_KEY_MARGIN_H_RATIO = 3f / 395f
+private const val WT_KEY_MARGIN_V_RATIO = 4.5f / 395f
+// 字号基准：默认键盘高 == 此值时样式表 sp 原样渲染 (fontScaleExtra = 1)；
+// 比例化后字号随键帽高同比缩放，使字母 glyph ≈ 0.40x键帽高。
+private val WT_FONT_REF_KEYBOARD_HEIGHT = 207.dp
+
 /**
  * The window constraints describe all relevant sizing minimums, maximums, defaults, and scaling factors
  * for given root bounds and window mode + sub-mode.
@@ -83,11 +97,30 @@ sealed class ImeWindowConstraints(rootInsets: ImeInsets.Root) {
     }
     open val dockToFixedBorder: Dp = 2.dp
 
+    /**
+     * WordTaker (batch3-A): extra multiplier applied on top of the sqrt resize font scaling,
+     * so the stylesheet sp values track the actual (screen-proportional) key cap height.
+     */
+    open val fontScaleExtra: Float = 1f
+
     abstract val defaultProps: ImeWindowProps
 
     protected fun <T> calculation(initializer: () -> T) = lazy(LazyThreadSafetyMode.PUBLICATION, initializer)
 
     sealed class Fixed(rootInsets: ImeInsets.Root) : ImeWindowConstraints(rootInsets) {
+        // batch3-A: 比例计算的宽度基准 —— 实际根窗口宽；零宽 (Fallback) 时退回基准屏宽。
+        protected val proportionBase by calculation {
+            if (rootBounds.width > 0.dp) rootBounds.width else baselineScreen.width
+        }
+
+        override val fontScaleExtra: Float by calculation {
+            if (formFactor.typeGuess == ImeFormFactor.Type.PHONE_PORTRAIT && defKeyboardHeight > 0.dp) {
+                defKeyboardHeight / WT_FONT_REF_KEYBOARD_HEIGHT
+            } else {
+                1f
+            }
+        }
+
         protected open val desiredMinPaddingHorizontal = 0.dp
         protected open val desiredDefPaddingHorizontal = 0.dp
         open val minPaddingHorizontal by calculation { rootBounds.width - maxKeyboardWidth }
@@ -108,39 +141,41 @@ sealed class ImeWindowConstraints(rootInsets: ImeInsets.Root) {
         }
 
         override val minKeyboardHeight by calculation {
-            val factor = when (formFactor.typeGuess) {
+            val height = when (formFactor.typeGuess) {
                 ImeFormFactor.Type.DESKTOP,
                 ImeFormFactor.Type.LARGE_TABLET,
-                ImeFormFactor.Type.TABLET_LANDSCAPE -> 0.27f
-                ImeFormFactor.Type.TABLET_PORTRAIT -> 0.17f
-                ImeFormFactor.Type.PHONE_LANDSCAPE -> 0.35f
-                ImeFormFactor.Type.PHONE_PORTRAIT -> 0.16f
+                ImeFormFactor.Type.TABLET_LANDSCAPE -> baselineScreen.height * 0.27f
+                ImeFormFactor.Type.TABLET_PORTRAIT -> baselineScreen.height * 0.17f
+                ImeFormFactor.Type.PHONE_LANDSCAPE -> baselineScreen.height * 0.35f
+                // batch3-A: 按实际屏宽比例。
+                ImeFormFactor.Type.PHONE_PORTRAIT -> proportionBase * WT_MIN_KEYBOARD_HEIGHT_RATIO
             }
-            (baselineScreen.height * factor).coerceAtMost(rootBounds.height)
+            height.coerceAtMost(rootBounds.height)
         }
         override val maxKeyboardHeight by calculation {
-            val factor = when (formFactor.typeGuess) {
+            val height = when (formFactor.typeGuess) {
                 ImeFormFactor.Type.DESKTOP,
                 ImeFormFactor.Type.LARGE_TABLET,
-                ImeFormFactor.Type.TABLET_LANDSCAPE -> 0.64f
-                ImeFormFactor.Type.TABLET_PORTRAIT -> 0.38f
-                ImeFormFactor.Type.PHONE_LANDSCAPE -> 0.66f
-                ImeFormFactor.Type.PHONE_PORTRAIT -> 0.46f
+                ImeFormFactor.Type.TABLET_LANDSCAPE -> baselineScreen.height * 0.64f
+                ImeFormFactor.Type.TABLET_PORTRAIT -> baselineScreen.height * 0.38f
+                ImeFormFactor.Type.PHONE_LANDSCAPE -> baselineScreen.height * 0.66f
+                // batch3-A: 按实际屏宽比例。
+                ImeFormFactor.Type.PHONE_PORTRAIT -> proportionBase * WT_MAX_KEYBOARD_HEIGHT_RATIO
             }
-            (baselineScreen.height * factor).coerceIn(minKeyboardHeight, rootBounds.height)
+            height.coerceIn(minKeyboardHeight, rootBounds.height)
         }
         override val defKeyboardHeight by calculation {
-            val factor = when (formFactor.typeGuess) {
+            val height = when (formFactor.typeGuess) {
                 ImeFormFactor.Type.DESKTOP,
                 ImeFormFactor.Type.LARGE_TABLET,
-                ImeFormFactor.Type.TABLET_LANDSCAPE -> 0.35f
-                ImeFormFactor.Type.TABLET_PORTRAIT -> 0.22f
-                ImeFormFactor.Type.PHONE_LANDSCAPE -> 0.47f
-                // WordTaker: matched to the A55 iOS reference — total keyboard height ≈0.345
-                // of screen (顶栏62dp + 4行, 行距/屏宽≈0.149-0.151).
-                ImeFormFactor.Type.PHONE_PORTRAIT -> 0.2825f
+                ImeFormFactor.Type.TABLET_LANDSCAPE -> baselineScreen.height * 0.35f
+                ImeFormFactor.Type.TABLET_PORTRAIT -> baselineScreen.height * 0.22f
+                ImeFormFactor.Type.PHONE_LANDSCAPE -> baselineScreen.height * 0.47f
+                // WordTaker batch3-A: 行距 = 0.1485x实际屏宽 (A55 iOS 参考图量化)，
+                // 4 行 → 默认键盘高 = 0.594x屏宽。任何设备占屏比例一致 (真机 1:1)。
+                ImeFormFactor.Type.PHONE_PORTRAIT -> proportionBase * WT_DEF_KEYBOARD_HEIGHT_RATIO
             }
-            (baselineScreen.height * factor).coerceIn(minKeyboardHeight, maxKeyboardHeight)
+            height.coerceIn(minKeyboardHeight, maxKeyboardHeight)
         }
 
         override val defKeyMarginH by calculation {
@@ -150,9 +185,9 @@ sealed class ImeWindowConstraints(rootInsets: ImeInsets.Root) {
                 ImeFormFactor.Type.TABLET_LANDSCAPE -> 2.dp
                 ImeFormFactor.Type.TABLET_PORTRAIT -> 5.dp
                 ImeFormFactor.Type.PHONE_LANDSCAPE -> 2.dp
-                // WordTaker (P1-6): WeChat-like gap rhythm — 6dp horizontal / 9dp vertical
-                // gaps (gap = 2 x per-side margin): wider keycaps, tighter rows.
-                ImeFormFactor.Type.PHONE_PORTRAIT -> 3.dp
+                // WordTaker (P1-6 → batch3-A): WeChat-like gap rhythm，原 3dp/4.5dp
+                // (@395dp 基准屏) 改为按实际屏宽比例。
+                ImeFormFactor.Type.PHONE_PORTRAIT -> proportionBase * WT_KEY_MARGIN_H_RATIO
             }
         }
         override val defKeyMarginV by calculation {
@@ -162,8 +197,8 @@ sealed class ImeWindowConstraints(rootInsets: ImeInsets.Root) {
                 ImeFormFactor.Type.TABLET_LANDSCAPE -> 5.dp
                 ImeFormFactor.Type.TABLET_PORTRAIT -> 5.dp
                 ImeFormFactor.Type.PHONE_LANDSCAPE -> 5.dp
-                // WordTaker (P1-6): see defKeyMarginH.
-                ImeFormFactor.Type.PHONE_PORTRAIT -> 4.5.dp
+                // WordTaker (P1-6 → batch3-A): see defKeyMarginH.
+                ImeFormFactor.Type.PHONE_PORTRAIT -> proportionBase * WT_KEY_MARGIN_V_RATIO
             }
         }
 

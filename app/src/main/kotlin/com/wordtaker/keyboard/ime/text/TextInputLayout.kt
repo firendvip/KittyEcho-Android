@@ -38,10 +38,8 @@ import com.wordtaker.keyboard.wordtaker.voice.DARK_PANEL_BG
 import com.wordtaker.keyboard.wordtaker.voice.WT_PANEL_GRAY
 import com.wordtaker.keyboard.wordtaker.handwriting.HandwritingInputLayout
 import com.wordtaker.keyboard.ime.nlp.handwriting.HandwritingLanguageProvider
-import com.wordtaker.keyboard.ime.keyboard.KeyboardMode
 import com.wordtaker.keyboard.ime.text.keyboard.TextKeyboardLayout
 import com.wordtaker.keyboard.ime.theme.FlorisImeUi
-import com.wordtaker.keyboard.wordtaker.toolbar.QuickSymbolStrip
 import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.subtypeManager
 import dev.patrickgold.jetpref.datastore.model.collectAsState
@@ -103,20 +101,11 @@ fun TextInputLayout(
                         painter = painterResource(R.drawable.ic_incognito),
                     )
                 }
-                // WordTaker: quick-symbol strip above the key rows on the symbols/numeric
-                // keyboards (matches the target design). It is absent on the letter keyboard.
-                val showQuickSymbols = state.keyboardMode == KeyboardMode.SYMBOLS ||
-                    state.keyboardMode == KeyboardMode.SYMBOLS2 ||
-                    state.keyboardMode == KeyboardMode.NUMERIC ||
-                    state.keyboardMode == KeyboardMode.NUMERIC_ADVANCED
-                if (showQuickSymbols) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        QuickSymbolStrip()
-                        TextKeyboardLayout(evaluator = evaluator)
-                    }
-                } else {
-                    TextKeyboardLayout(evaluator = evaluator)
-                }
+                // WordTaker: the former quick-symbol strip above the symbol/numeric keyboards
+                // was replaced by the full-page 符号 category system (SYMBOLS2 tabs). Every
+                // keyboard mode now renders the plain key grid, so all pages share the exact
+                // same total height as the letter keyboard.
+                TextKeyboardLayout(evaluator = evaluator)
             }
         }
     }

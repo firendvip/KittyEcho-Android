@@ -45,7 +45,7 @@ import com.wordtaker.keyboard.ime.keyboard.FlorisImeSizing
 import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.wordtaker.account.AccountResult
 import com.wordtaker.keyboard.wordtaker.toolbar.TOOLBAR_HEIGHT_DP
-import com.wordtaker.keyboard.wordtaker.voice.CAT_STRIP_HEIGHT_DP
+import com.wordtaker.keyboard.wordtaker.voice.catStripHeight
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_HANDWRITING
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_QWERTY
@@ -98,11 +98,11 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
     val titleColor = if (dark) Color(0xFFE3E3E6) else Color(0xFF1B1B1F)
     val rowTextColor = if (dark) Color(0xFFE3E3E6) else Color(0xFF1B1B1F)
 
-    // item3: 面板高度与键盘态严格等高 —— 键盘态总高 = 顶条(59) + keyboardUiHeight，
-    // 设置态总高 = 工具栏(44) + 本面板。令 面板高 = keyboardUiHeight + (59-44)，
-    // 两种状态 IME 窗口高度完全一致，切换零跳动。
+    // item3: 面板高度与键盘态严格等高 —— 键盘态总高 = 顶条(0.152x屏宽) + keyboardUiHeight，
+    // 设置态总高 = 工具栏(44) + 本面板。令 面板高 = keyboardUiHeight + (顶条 - 44)，
+    // 两种状态 IME 窗口高度完全一致，切换零跳动。(batch3-A: 顶条已按屏宽比例化)
     val panelHeight = FlorisImeSizing.keyboardUiHeight() +
-        (CAT_STRIP_HEIGHT_DP - TOOLBAR_HEIGHT_DP).dp
+        (catStripHeight() - TOOLBAR_HEIGHT_DP.dp)
 
     if (showAccountPage) {
         ImeAccountSubPage(

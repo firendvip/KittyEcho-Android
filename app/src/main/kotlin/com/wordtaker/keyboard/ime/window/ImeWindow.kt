@@ -58,6 +58,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.width as dpRectWidth
 import androidx.compose.ui.unit.roundToIntRect
 import com.wordtaker.keyboard.R
 import com.wordtaker.keyboard.app.devtools.DevtoolsOverlay
@@ -99,10 +100,11 @@ import com.wordtaker.lib.snygg.ui.rememberSnyggThemeQuery
  * @see BottomSheetWindow
  * @see DevtoolsOverlay
  */
-// 微信风底部悬浮空隙 (dp): fixed 模式下键盘内容之下的固定空白，让键盘不贴屏幕最底。
+// 微信风底部悬浮空隙: fixed 模式下键盘内容之下的固定空白，让键盘不贴屏幕最底。
 // 空隙渲染为键盘底色 (WindowInner 的 SnyggBox 背景铺满 padding 之外)，并计入 IME 窗口高度，
 // 故宿主 App 内容会被相应顶起、不被遮挡。
-private const val FIXED_BOTTOM_GAP_DP = 15
+// batch3-A: 原固定 15dp (@395dp 基准屏) 改为按实际屏宽比例，真机占屏比例 1:1。
+private const val FIXED_BOTTOM_GAP_RATIO = 15f / 395f
 
 // item3: 键盘↔设置↔历史等模式切换的淡入淡出时长 —— 高度已恒定，只做 120ms fade。
 private const val MODE_SWITCH_FADE_MS = 120
@@ -217,6 +219,10 @@ private fun ImeInnerWindow() {
     val state by keyboardManager.activeState.collectAsState()
     val windowSpec by windowController.activeWindowSpec.collectAsState()
 
+    // batch3-A: 底部空隙 = 屏宽 x 比例；根窗口宽未知 (首帧/Fallback) 时退回 15dp。
+    val rootWidth = windowSpec.constraints.rootBounds.dpRectWidth
+    val fixedBottomGap = if (rootWidth > 0.dp) rootWidth * FIXED_BOTTOM_GAP_RATIO else 15.dp
+
     ProvideActualLayoutDirection {
         val layoutDirection = LocalLayoutDirection.current
         LaunchedEffect(layoutDirection) {
@@ -241,7 +247,7 @@ private fun ImeInnerWindow() {
                         // 内容变高会让整个 IME 窗口变高，onGloballyPositioned 上报的窗口 top 随之上移，
                         // onComputeInsets 的 contentTopInsets = windowBounds.top 因此已含这条空隙，
                         // 宿主 App 内容被顶起相同高度，绝不会被空隙遮挡或重叠。
-                        bottom = props.paddingBottom.coerceAtLeast(0.dp) + FIXED_BOTTOM_GAP_DP.dp,
+                        bottom = props.paddingBottom.coerceAtLeast(0.dp) + fixedBottomGap,
                     )
             }
             .ifIsInstance<ImeWindowProps.Floating>(windowSpec.props) {

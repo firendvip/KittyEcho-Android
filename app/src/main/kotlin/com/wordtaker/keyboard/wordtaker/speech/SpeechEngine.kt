@@ -1,11 +1,8 @@
 package com.wordtaker.keyboard.wordtaker.speech
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
@@ -13,10 +10,10 @@ import kotlinx.coroutines.flow.asStateFlow
  * the streaming Zipformer) can be swapped without touching the UI layer.
  *
  * Streaming contract: between [start] and [stop], the engine pushes live partial
- * transcripts into [partials] (edge-to-edge, latest wins). 连续听写：每当静音检测器
- * 判定一句说完（endpoint），引擎把该句定稿文本发到 [segments] 并自行重置解码流，
- * 继续听下一句 —— 录音不停止。只有 UI 主动调用 [stop]（用户点击结束）才收尾，
- * [stop] 返回最后一段未定稿的尾巴文本。
+ * transcripts into [partials] (edge-to-edge, latest wins). batch3-C 攒段：每当静音
+ * 检测器判定一句说完（endpoint），引擎把该句定稿文本累积在内部缓冲并自行重置
+ * 解码流，继续听下一句 —— 录音不停止、不对外发射。只有 UI 主动调用 [stop]
+ * （用户点击结束）才收尾，[stop] 返回「攒下的所有定稿段 + 尾巴」整段文本。
  */
 interface SpeechEngine {
     /**
@@ -29,7 +26,7 @@ interface SpeechEngine {
      */
     fun start(suppressLeadingMs: Long = 0L)
 
-    /** Stop capturing and return the recognized text (最后一段未定稿的尾巴). */
+    /** Stop capturing and return the recognized text (攒下的定稿段 + 尾巴，整段). */
     suspend fun stop(): String
 
     /** Cancel an active recording without processing. */
@@ -46,9 +43,6 @@ interface SpeechEngine {
 
     /** Live partial transcript of the CURRENT recording ("" when idle). */
     val partials: StateFlow<String>
-
-    /** 连续听写：每检测到一句说完(endpoint)即发出该句定稿文本，录音继续。 */
-    val segments: SharedFlow<String>
 }
 
 /** Thrown by a real engine when RECORD_AUDIO has not been granted. */
@@ -62,9 +56,6 @@ class MockSpeechEngine : SpeechEngine {
 
     private val _partials = MutableStateFlow("")
     override val partials: StateFlow<String> = _partials.asStateFlow()
-
-    private val _segments = MutableSharedFlow<String>(extraBufferCapacity = 8)
-    override val segments: SharedFlow<String> = _segments.asSharedFlow()
 
     override fun start(suppressLeadingMs: Long) {
         // No-op for the mock pipeline.

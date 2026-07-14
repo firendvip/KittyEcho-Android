@@ -53,7 +53,9 @@ sealed interface ImeWindowProps {
 
     fun calcFontScale(constraints: ImeWindowConstraints): Float {
         val factor = keyboardHeight / constraints.defKeyboardHeight
-        return sqrt(factor)
+        // batch3-A: fontScaleExtra 使样式表 sp 随实际 (屏宽比例化的) 键帽高同比缩放；
+        // 用户手动改键盘高仍走原 sqrt 曲线。
+        return sqrt(factor) * constraints.fontScaleExtra
     }
 
     /**

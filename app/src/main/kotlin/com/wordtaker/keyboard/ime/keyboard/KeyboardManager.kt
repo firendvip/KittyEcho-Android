@@ -54,7 +54,10 @@ import com.wordtaker.keyboard.ime.text.key.KeyType
 import com.wordtaker.keyboard.ime.text.key.KeyVariation
 import com.wordtaker.keyboard.ime.text.key.UtilityKeyAction
 import com.wordtaker.keyboard.ime.text.keyboard.TextKeyData
+import com.wordtaker.keyboard.ime.text.keyboard.TextKeyboard
 import com.wordtaker.keyboard.ime.text.keyboard.TextKeyboardCache
+import com.wordtaker.keyboard.wordtaker.symbols.Sym2Category
+import com.wordtaker.keyboard.wordtaker.symbols.Symbols2State
 import com.wordtaker.keyboard.lib.devtools.LogTopic
 import com.wordtaker.keyboard.lib.devtools.flogError
 import com.wordtaker.keyboard.lib.ext.ExtensionComponentName
@@ -96,6 +99,14 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     val layoutManager = LayoutManager(context)
     private val keyboardCache = TextKeyboardCache()
+
+    // WordTaker 符号页: cached category-substituted SYMBOLS2 keyboard (see updateActiveEvaluators).
+    private class Sym2CachedKeyboard(
+        val base: TextKeyboard,
+        val symbols: List<String>,
+        val keyboard: TextKeyboard,
+    )
+    private var sym2KeyboardCache: Sym2CachedKeyboard? = null
 
     val resources = KeyboardManagerResources()
     val activeState = ObservableKeyboardState.new()
@@ -187,11 +198,27 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
             if (mode != KeyboardMode.CHARACTERS) {
                 state.inputShiftState = InputShiftState.UNSHIFTED
             }
-            val computedKeyboard = keyboardCache.getOrElseAsync(mode, subtype) {
+            val baseKeyboard = keyboardCache.getOrElseAsync(mode, subtype) {
                 layoutManager.computeKeyboardAsync(
                     keyboardMode = mode,
                     subtype = subtype,
                 ).await()
+            }
+            // WordTaker 符号页: swap the 26 symbol slots according to the selected category
+            // tab. Cached per (base keyboard, symbol list) so ordinary re-evaluations reuse
+            // the same TextKey instances (press state, bounds) like every other mode.
+            val computedKeyboard = if (mode == KeyboardMode.SYMBOLS2) {
+                val symbols = Symbols2State.currentSymbols()
+                val cached = sym2KeyboardCache
+                if (cached != null && cached.base === baseKeyboard && cached.symbols === symbols) {
+                    cached.keyboard
+                } else {
+                    Symbols2State.substituteSymbols(baseKeyboard, symbols).also {
+                        sym2KeyboardCache = Sym2CachedKeyboard(baseKeyboard, symbols, it)
+                    }
+                }
+            } else {
+                baseKeyboard
             }
             val computingEvaluator = ComputingEvaluatorImpl(
                 version = activeEvaluatorVersion.getAndAdd(1),
@@ -833,7 +860,24 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
             KeyCode.VIEW_PHONE -> activeState.keyboardMode = KeyboardMode.PHONE
             KeyCode.VIEW_PHONE2 -> activeState.keyboardMode = KeyboardMode.PHONE2
             KeyCode.VIEW_SYMBOLS -> activeState.keyboardMode = KeyboardMode.SYMBOLS
-            KeyCode.VIEW_SYMBOLS2 -> activeState.keyboardMode = KeyboardMode.SYMBOLS2
+            KeyCode.VIEW_SYMBOLS2 -> {
+                // Freeze the RECENT snapshot on (re-)entry so keys don't shuffle mid-typing.
+                Symbols2State.refreshSnapshot(appContext)
+                activeState.keyboardMode = KeyboardMode.SYMBOLS2
+            }
+            KeyCode.SYM2_CAT_RECENT,
+            KeyCode.SYM2_CAT_CJK,
+            KeyCode.SYM2_CAT_EN,
+            KeyCode.SYM2_CAT_BRACKET,
+            KeyCode.SYM2_CAT_CURRENCY,
+            KeyCode.SYM2_CAT_MATH,
+            KeyCode.SYM2_CAT_DASH,
+            KeyCode.SYM2_CAT_CIRCLED -> {
+                Sym2Category.fromKeyCode(data.code)?.let { category ->
+                    Symbols2State.selectCategory(category, appContext)
+                    updateActiveEvaluators()
+                }
+            }
             else -> {
                 if (activeState.imeUiMode == ImeUiMode.MEDIA) {
                     nlpManager.getAutoCommitCandidate()?.let { commitCandidate(it) }
@@ -865,6 +909,13 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
                                 nlpManager.getAutoCommitCandidate()?.let { commitCandidate(it) }
                             }
                             editorInstance.commitChar(text)
+                            // WordTaker 符号页「时钟/最近」分类: remember symbols typed on the
+                            // symbol keyboards (letters/digits are filtered inside recordSymbol).
+                            if (activeState.keyboardMode == KeyboardMode.SYMBOLS ||
+                                activeState.keyboardMode == KeyboardMode.SYMBOLS2
+                            ) {
+                                Symbols2State.recordSymbol(text, appContext)
+                            }
                         }
                         else -> {
                             flogError(LogTopic.KEY_EVENTS) { "Received unknown key: $data" }

@@ -36,7 +36,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.width as dpRectWidth
+import com.wordtaker.keyboard.ime.window.LocalWindowController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wordtaker.keyboard.FlorisImeService
@@ -96,6 +99,8 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
     )
 
     val state by vm.state.collectAsStateWithLifecycle()
+    // batch3-C 多猫并行：后台还有 N 段在「转写定稿+润色+上屏」时给出视觉反馈。
+    val pending by vm.pending.collectAsStateWithLifecycle()
     val settings by AppGraph.settingsRepository.settings
         .collectAsStateWithLifecycle(initialValue = SettingsState())
 
@@ -150,12 +155,11 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
     val candidates by nlpManager.activeCandidatesFlow.collectAsState()
     val showCandidatesInStrip = candidates.isNotEmpty() && !active
 
-    // VISUAL: the "点击说话" toolbar strip (flower + pill + collapse chevron) belongs ONLY to
-    // the LETTER (CHARACTERS) keyboard. On SYMBOLS/SYMBOLS2/NUMERIC/NUMERIC_ADVANCED/PHONE/
-    // PHONE2 the top row is the QuickSymbolStrip (rendered inside the keyboard body by
-    // TextInputLayout) — so we drop this strip entirely there, and the panel shrinks by 56dp.
-    val kbState by keyboardManager.activeState.collectAsState()
-    val showToolbarStrip = kbState.keyboardMode == com.wordtaker.keyboard.ime.keyboard.KeyboardMode.CHARACTERS
+    // VISUAL (batch3-B): the toolbar strip now renders on EVERY keyboard mode — the former
+    // QuickSymbolStrip was removed, and the 符号/12·34 pages carry their controls inside the
+    // key grid. Every page is therefore 顶栏 + 4 key rows and shares the exact same total
+    // panel height as the letter keyboard (hard requirement: zero height change on switch).
+    val showToolbarStrip = true
 
     // Cross-fade + cat-scale driver: 0 = 待机 (keyboard shown), 1 = 录音/处理 (solid + big cat).
     // item5: 点猫即开始录音(触发不变)，但动画上猫由小变大、缓缓走出 —— 不再"直接跳出"。
@@ -176,10 +180,12 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
     // across recompositions and never contributes a per-frame height jitter (which reads
     // as shifting / black bands). smallBox is a constant, largeBox derives from height.
     val keyboardBodyHeight = FlorisImeSizing.keyboardUiHeight()
+    // batch3-A: 顶栏高按实际屏宽比例 (0.152x屏宽)，真机/模拟器任何密度下占比一致。
+    val stripHeight = catStripHeight()
     // The cat draw box height interpolates between the small strip cat and the large
     // centred recording cat — same CatSkin instance, so 趴顶条⇄走中间放大 is one fluid
     // scale, never a swap to another sprite.
-    val smallBox = CAT_STRIP_HEIGHT_DP.dp
+    val smallBox = stripHeight
     val largeBox = remember(keyboardBodyHeight) {
         (keyboardBodyHeight * RECORDING_CAT_FRACTION)
             .coerceIn(CAT_BOX_MIN_DP.dp, CAT_BOX_MAX_DP.dp)
@@ -197,16 +203,14 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
         // drawn centred over this same row by Layer 3 — so设置/语音/折叠 与睡猫处于同一行
         // (item2)，语音图标与猫垂直对齐、间距一致。工具栏图标在录音时随键盘一起淡出。
         Column(modifier = Modifier.fillMaxWidth()) {
-            // The strip slot — 56dp on the LETTER keyboard, whatever it contains, so nothing
-            // below ever shifts. While typing (candidates present) the whole row becomes the
-            // candidate row, filling full width; otherwise it shows the toolbar. On symbol/
-            // numeric/phone keyboards the strip is omitted entirely (no 56dp gap) — the
-            // QuickSymbolStrip inside the keyboard body becomes the top row instead.
+            // The strip slot — fixed height on EVERY keyboard mode, whatever it contains, so
+            // nothing below ever shifts. While typing (candidates present) the whole row
+            // becomes the candidate row, filling full width; otherwise it shows the toolbar.
             if (showToolbarStrip) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(CAT_STRIP_HEIGHT_DP.dp)
+                    .height(stripHeight)
                     .alpha(1f - activeAnim),
                 contentAlignment = Alignment.Center,
             ) {
@@ -258,6 +262,11 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
                                 VoiceTrigger.requestStart()
                             },
                         )
+                        // batch3-C: 后台有 N 段在处理 → 药丸旁挂「忙碌小猫 ×N」角标。
+                        if (pending > 0) {
+                            Spacer(modifier = Modifier.width(STRIP_BUTTON_GAP_DP.dp))
+                            ProcessingCatsChip(count = pending, dark = dark)
+                        }
                         // 药丸之后放弹性空白，把收起(折叠)图标顶到最右，右侧留空 (键盘底色)。
                         Spacer(modifier = Modifier.weight(1f))
                         // Right: collapse —— 收起键盘窗口。
@@ -341,47 +350,30 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
         // anywhere stops (Layer 3's full-screen clickable while active). ----
 
         // ---- Hints (suppressed in minimal mode) ----
-        // 需求#10：忙碌(识别/润色)时也显示状态文案；录音时"正在倾听..."。
-        if (!settings.minimal && active) {
-            val hint = when (state.phase) {
-                VoicePhase.Recording -> "正在倾听...点击结束"
-                VoicePhase.Recognizing -> "正在识别..."
-                VoicePhase.Polishing -> "正在AI润色中..."
-                else -> null
-            }
-            if (hint != null) {
-                Text(
-                    text = hint,
-                    style = MaterialTheme.typography.titleMedium,
-                    // P2-303: IME 组合树没有配套的深色 MaterialTheme，colorScheme.onSurface
-                    // 在深色底上仍是近黑色、几乎不可见。按面板底色显式取反色。
-                    color = if (dark) OVERLAY_FG_DARK else OVERLAY_FG_LIGHT,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = HINT_EDGE_PADDING_DP.dp)
-                        .alpha(activeAnim),
-                )
-            }
+        // batch3-C：录音中不再显示实时字幕/识别/润色文案 —— 只有小猫动画 + 倾听提示；
+        // 定稿+润色+上屏全在后台并行（多猫角标示意）。
+        if (!settings.minimal && active && state.phase == VoicePhase.Recording) {
+            Text(
+                text = "正在倾听...点击结束",
+                style = MaterialTheme.typography.titleMedium,
+                // P2-303: IME 组合树没有配套的深色 MaterialTheme，colorScheme.onSurface
+                // 在深色底上仍是近黑色、几乎不可见。按面板底色显式取反色。
+                color = if (dark) OVERLAY_FG_DARK else OVERLAY_FG_LIGHT,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = HINT_EDGE_PADDING_DP.dp)
+                    .alpha(activeAnim),
+            )
         }
 
-        // ---- 流式实时字幕：边说边出字（阶段2）。识别中也保留，直到定稿/复位清空 ----
-        if (active && state.partialText.isNotBlank()) {
-            Text(
-                text = state.partialText,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (dark) OVERLAY_FG_DARK else OVERLAY_FG_LIGHT, // P2-303 同上
-
-                maxLines = PARTIAL_MAX_LINES,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        // ---- batch3-C 多猫并行角标：录音界面右上角显示「忙碌小猫 ×N」 ----
+        if (active && pending > 0) {
+            ProcessingCatsChip(
+                count = pending,
+                dark = dark,
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(
-                        start = PARTIAL_H_PADDING_DP.dp,
-                        end = PARTIAL_H_PADDING_DP.dp,
-                        bottom = PARTIAL_BOTTOM_PADDING_DP.dp,
-                    )
+                    .align(Alignment.TopEnd)
+                    .padding(top = HINT_EDGE_PADDING_DP.dp, end = CHIP_EDGE_PADDING_DP.dp)
                     .alpha(activeAnim),
             )
         }
@@ -500,10 +492,9 @@ private fun StripCircleButton(
 }
 
 /**
- * 顶栏小猫头像钮 (item4)：白圆底 + 品牌猫头 (保留自身彩色)。白圈只比猫头图形大
- * ~5dp：猫头在 ic_brand_cat 的 100 视口里约占 66%，把矢量放大 STRIP_CAT_GLYPH_SCALE
- * 倍后猫头直径 ≈ 0.66×1.25×30 ≈ 25dp，白圈 30dp。放大溢出的装饰边角被 CircleShape
- * clip 裁掉，猫头本体不受影响。
+ * 顶栏小猫头像钮 (item4 → batch3-A 去白圈)：只留猫头图形 (ic_brand_cat_bare，无白色
+ * 圆角矩形底)，深浅色同。外层 44dp 透明 Box 保证触控目标 ≥44dp；indication=null 避免
+ * 焦点/水波纹在无底钮上显示成灰色方块。猫头直径 ≈ 0.62x44 ≈ 27dp，视觉与原白圈持平。
  */
 @Composable
 private fun StripCatButton(
@@ -512,24 +503,56 @@ private fun StripCatButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val noRipple = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
-            .size(STRIP_CAT_BUTTON_DP.dp)
-            .clip(androidx.compose.foundation.shape.CircleShape)
-            .background(if (dark) WT_TOOLBAR_CIRCLE_DARK else androidx.compose.ui.graphics.Color.White)
-            .clickable(onClick = onClick),
+            .size(STRIP_CAT_TOUCH_DP.dp)
+            .clickable(
+                interactionSource = noRipple,
+                indication = null,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         androidx.compose.material3.Icon(
-            painter = androidx.compose.ui.res.painterResource(R.drawable.ic_brand_cat),
+            painter = androidx.compose.ui.res.painterResource(R.drawable.ic_brand_cat_bare),
             contentDescription = contentDescription,
             tint = androidx.compose.ui.graphics.Color.Unspecified,
-            modifier = Modifier
-                .size(STRIP_CAT_BUTTON_DP.dp)
-                .graphicsLayer {
-                    scaleX = STRIP_CAT_GLYPH_SCALE
-                    scaleY = STRIP_CAT_GLYPH_SCALE
-                },
+            modifier = Modifier.size(STRIP_CAT_GLYPH_DP.dp),
+        )
+    }
+}
+
+/**
+ * batch3-C 多猫并行角标：圆角药丸底 + 无底猫头 + 「×N」。表示后台有 N 段录音在
+ * 「转写定稿→润色→上屏」流水线里排队/干活（一段=一只小猫）。待机顶栏与录音界面共用。
+ */
+@Composable
+private fun ProcessingCatsChip(
+    count: Int,
+    dark: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val bg = if (dark) PILL_BG_DARK else PILL_BG_LIGHT
+    val fg = if (dark) PILL_FG_DARK else PILL_FG_LIGHT
+    Row(
+        modifier = modifier
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(PILL_CORNER_DP.dp))
+            .background(bg)
+            .padding(horizontal = CHIP_H_PADDING_DP.dp, vertical = CHIP_V_PADDING_DP.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.Icon(
+            painter = androidx.compose.ui.res.painterResource(R.drawable.ic_brand_cat_bare),
+            contentDescription = "${count}段处理中",
+            tint = androidx.compose.ui.graphics.Color.Unspecified,
+            modifier = Modifier.size(CHIP_CAT_DP.dp),
+        )
+        Spacer(modifier = Modifier.width(CHIP_GAP_DP.dp))
+        Text(
+            text = "×$count",
+            style = MaterialTheme.typography.bodyMedium,
+            color = fg,
         )
     }
 }
@@ -545,13 +568,26 @@ private fun biasAlignment(bias: Float) = androidx.compose.ui.BiasAlignment(0f, b
 // almost all the panel. The sleeping cat is bottom-anchored inside this strip; the icons
 // are vertically centred in the same row.
 // item3: 设置/历史面板需要引用它来对齐总高 (顶条 + 键盘 = 工具栏 + 面板)。
-internal const val CAT_STRIP_HEIGHT_DP = 59
+// batch3-A: 顶栏高 = 0.152x实际屏宽 (参考图量化)，不再固定 59dp —— 见 [catStripHeight]。
+internal const val CAT_STRIP_HEIGHT_RATIO = 0.152f
+private val CAT_STRIP_HEIGHT_FALLBACK = 59.dp
+
+/** 顶栏高：0.152x实际屏宽；根窗口宽未知 (首帧/Fallback) 时退回 59dp。 */
+@Composable
+internal fun catStripHeight(): Dp {
+    val windowController = LocalWindowController.current
+    val windowSpec by windowController.activeWindowSpec.collectAsState()
+    val width = windowSpec.constraints.rootBounds.dpRectWidth
+    return if (width > 0.dp) width * CAT_STRIP_HEIGHT_RATIO else CAT_STRIP_HEIGHT_FALLBACK
+}
+
 // item8: 白圆钮"抱紧"图标 —— 圆只比图标大 6dp (26 vs 20)，与设置态工具栏圆钮一致。
 private const val STRIP_CIRCLE_BUTTON_DP = 26
 private const val STRIP_CIRCLE_ICON_DP = 20
-// item4: 小猫头像钮 —— 30dp 白圆 + 矢量放大 1.25 倍，白圈 ≈ 猫头直径 + 5dp。
-private const val STRIP_CAT_BUTTON_DP = 30
-private const val STRIP_CAT_GLYPH_SCALE = 1.25f
+// batch3-A: 小猫头像钮去白圈 —— 44dp 不可见触控区 + 44dp 无底猫头矢量
+// (头部占视口 ~62%，猫头直径 ≈ 27dp，补偿去圈后的视觉变小)。
+private const val STRIP_CAT_TOUCH_DP = 44
+private const val STRIP_CAT_GLYPH_DP = 44
 // item2: 猫尺寸按手机端调到合适大小 —— 在这一行里与 28dp 图标协调，不过大不过小。
 // 0.42→0.34 收窄睡猫宽度盒，使它在同一行里与图标比例和谐 (参考 CatSkinFx 头身比)。
 private const val STRIP_CAT_WIDTH_FRACTION = 0.34f
@@ -578,10 +614,12 @@ private const val CAT_BOX_MAX_DP = 180
 // 录音满态把猫盒上移这个比例的盒高，使猫本体在面板内垂直居中。
 private const val CAT_VISUAL_CENTER_FRACTION = 0.19f
 private const val HINT_EDGE_PADDING_DP = 8
-// 流式实时字幕（阶段2）：底部居中，最多两行，位于"取消"药丸上方。
-private const val PARTIAL_MAX_LINES = 2
-private const val PARTIAL_H_PADDING_DP = 24
-private const val PARTIAL_BOTTOM_PADDING_DP = 56
+// batch3-C 多猫并行角标（忙碌小猫 ×N）尺寸。
+private const val CHIP_H_PADDING_DP = 10
+private const val CHIP_V_PADDING_DP = 4
+private const val CHIP_CAT_DP = 18
+private const val CHIP_GAP_DP = 4
+private const val CHIP_EDGE_PADDING_DP = 12
 // 需求#9 "取消" 药丸尺寸/配色。
 private const val CANCEL_EDGE_PADDING_DP = 12
 private const val CANCEL_H_PADDING_DP = 20

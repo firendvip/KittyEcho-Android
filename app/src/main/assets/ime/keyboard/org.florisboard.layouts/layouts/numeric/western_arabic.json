@@ -11,20 +11,20 @@
     { "code":   52, "label": "4", "type": "numeric" },
     { "code":   53, "label": "5", "type": "numeric" },
     { "code":   54, "label": "6", "type": "numeric" },
-    { "code":   32, "label": "space" }
+    { "code":   46, "label": "." }
   ],
   [
     { "code":   45, "label": "-" },
     { "code":   55, "label": "7", "type": "numeric" },
     { "code":   56, "label": "8", "type": "numeric" },
     { "code":   57, "label": "9", "type": "numeric" },
-    { "code": 12290, "label": "。" }
+    { "code":   10, "label": "enter", "type": "enter_editing" }
   ],
   [
+    { "code":   42, "label": "*" },
     { "code": -201, "label": "view_characters", "type": "system_gui" },
     { "code": -202, "label": "view_symbols", "type": "system_gui" },
     { "code":   48, "label": "0", "type": "numeric" },
-    { "code":   46, "label": "." },
-    { "code":   10, "label": "enter", "type": "enter_editing" }
+    { "code":   32, "label": "space" }
   ]
 ]

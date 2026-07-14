@@ -21,6 +21,7 @@ import android.graphics.drawable.Drawable
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -52,13 +53,22 @@ fun FlorisCanvasIcon(
     modifier: Modifier = Modifier,
     contentDescription: String? = null,
 ) {
-    val bitmap = createBitmap(
-        width = drawable.intrinsicWidth,
-        height = drawable.intrinsicHeight,
-    )
-    val canvas = Canvas(bitmap)
-    drawable.setBounds(0, 0, canvas.width, canvas.height)
-    drawable.draw(canvas)
+    // Perf: rasterizing `drawable` into a fresh bitmap is real CPU work (allocate +
+    // software-canvas draw). It previously ran unconditionally on every composition of
+    // this composable (e.g. every time the caller recomposes for an unrelated reason),
+    // adding avoidable main-thread cost during the very first frame the settings screen
+    // draws (BrandHeader's cat icon). The source `drawable` is stable across recompositions
+    // for a given call site, so `remember` it once instead of re-rasterizing every time.
+    val bitmap = remember(drawable) {
+        val bmp = createBitmap(
+            width = drawable.intrinsicWidth,
+            height = drawable.intrinsicHeight,
+        )
+        val canvas = Canvas(bmp)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        bmp
+    }
     Image(
         modifier = modifier,
         bitmap = bitmap.asImageBitmap(),

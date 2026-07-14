@@ -11,11 +11,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
@@ -26,9 +23,10 @@ import kotlinx.coroutines.withContext
  *
  * Pipeline: the capture thread pushes float chunks into [queue]; a dedicated decode
  * worker drains it into the active Zipformer session, publishing live partials into
- * [partials]. 连续听写：endpoint（尾部静音）命中时，worker 把该句定稿文本发到
- * [segments]，随即 reset 解码流继续听下一句 —— 录音不停止。[stop]（用户点击结束）
- * flushes the session and returns 最后一段未定稿的尾巴文本。
+ * [partials]. batch3-C 攒段模式：endpoint（尾部静音）命中时，worker 把该句定稿文本
+ * 追加到 [finalizedSegments] 缓冲（不对外发射、不上屏），随即 reset 解码流继续听
+ * 下一句 —— 录音不停止。[stop]（用户点击结束）flushes the session and returns
+ * 「攒下的所有定稿段 + 最后未定稿的尾巴」拼成的整段文本。
  *
  * Cold-start fallback: if the recognizer wasn't ready when [start] ran (first-use
  * warm-up still loading), the recorder still captures; [stop] then waits briefly for
@@ -47,9 +45,11 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
     private val _partials = MutableStateFlow("")
     override val partials: StateFlow<String> = _partials.asStateFlow()
 
-    // 连续听写：每句定稿文本（endpoint 触发）。容量放宽到 8，避免 VM 消费慢时丢句。
-    private val _segments = MutableSharedFlow<String>(extraBufferCapacity = 8)
-    override val segments: SharedFlow<String> = _segments.asSharedFlow()
+    // batch3-C 攒段缓冲：endpoint 定稿的句子只累积在这里，stop() 时与尾巴拼成整段
+    // 一次性返回。worker 线程 add；stop() 在 drainWorker（join）之后读取，happens-before
+    // 由 Thread.join 保证；abortSession（主线程）清空靠 synchronizedList 保护。
+    private val finalizedSegments =
+        java.util.Collections.synchronizedList(mutableListOf<String>())
 
     // Chunk hand-off between the capture thread and the decode worker.
     private val queue = LinkedBlockingQueue<FloatArray>()
@@ -121,6 +121,7 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
         }
         _partials.value = ""
         queue.clear()
+        finalizedSegments.clear()
 
         // Open the live session up front when the recognizer is ready; otherwise the
         // recorder still captures and stop() batch-decodes as a fallback.
@@ -157,10 +158,15 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
         val samples = recorder.stop()
         val text = if (sessionOpened) {
             // Live streaming path: let the worker drain the tail of the queue, then
-            // flush the session for the final result.
+            // flush the session for the tail; 与攒下的定稿段拼成整段返回。
             drainWorker()
             sessionOpened = false
-            zip.finishSession()
+            val tail = zip.finishSession().trim()
+            // worker 已 join，此处读取无并发；copy 后立刻清空。
+            val parts = ArrayList(finalizedSegments)
+            finalizedSegments.clear()
+            if (tail.isNotBlank()) parts.add(tail)
+            parts.joinToString(SEGMENT_JOINER)
         } else {
             // Cold-start fallback: batch-decode the accumulated buffer.
             if (samples.isEmpty()) return@withContext ""
@@ -187,6 +193,7 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
         workerRunning = false
         worker = null
         queue.clear()
+        finalizedSegments.clear()
         _partials.value = ""
         if (sessionOpened) {
             sessionOpened = false
@@ -227,16 +234,17 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
                     _partials.value = partial.text
                 }
                 if (partial.isEndpoint) {
-                    // 连续听写：一句说完（尾部静音）→ 定稿该句发给 UI，reset 解码流
-                    // 继续听下一句。reset 与 feed 同在本线程，二者不会交错。空文本的
-                    // endpoint（纯静音，rule1）也 reset，保持检测器状态干净。
+                    // batch3-C 攒段：一句说完（尾部静音）→ 定稿文本只累积进缓冲
+                    // （不发射、不上屏），reset 解码流继续听下一句。reset 与 feed 同在
+                    // 本线程，二者不会交错。空文本的 endpoint（纯静音，rule1）也 reset，
+                    // 保持检测器状态干净。
                     val segment = partial.text.trim()
                     zip.resetSession()
                     lastPartial = ""
                     _partials.value = ""
                     if (segment.isNotBlank()) {
-                        Log.i(TAG, "segment finalized: ${segment.length} chars")
-                        _segments.tryEmit(segment)
+                        Log.i(TAG, "segment finalized (buffered): ${segment.length} chars")
+                        finalizedSegments.add(segment)
                     }
                 }
             }
@@ -290,5 +298,9 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
         const val READY_TIMEOUT_MS = 3_000L
         const val QUEUE_POLL_MS = 50L
         const val DRAIN_JOIN_MS = 3_000L
+
+        // 攒段拼接分隔符：endpoint 边界≈一句话结束（Zipformer 流式输出无标点），
+        // 用中文逗号给润色模型明确的句界提示；润色失败回退原文时也保持可读。
+        const val SEGMENT_JOINER = "，"
     }
 }

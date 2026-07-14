@@ -113,6 +113,17 @@ object KeyCode {
 
     const val URI_COMPONENT_TLD =           -255
 
+    // WordTaker symbols2 (符号页) category tabs — bottom row of the SYMBOLS2 keyboard.
+    // Pressing one swaps the symbol set shown in rows 1-3 (see Symbols2Categories.kt).
+    const val SYM2_CAT_RECENT =             -261
+    const val SYM2_CAT_CJK =                -262
+    const val SYM2_CAT_EN =                 -263
+    const val SYM2_CAT_BRACKET =            -264
+    const val SYM2_CAT_CURRENCY =           -265
+    const val SYM2_CAT_MATH =               -266
+    const val SYM2_CAT_DASH =               -267
+    const val SYM2_CAT_CIRCLED =            -268
+
     const val SETTINGS =                    -301
 
     const val CURRENCY_SLOT_1 =             -801

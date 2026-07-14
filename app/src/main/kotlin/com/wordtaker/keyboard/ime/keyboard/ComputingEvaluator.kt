@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.KeyboardCapslock
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.KeyboardVoice
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.SentimentSatisfiedAlt
@@ -198,6 +199,15 @@ fun ComputingEvaluator.computeLabel(data: KeyData): String? {
             KeyCode.VIEW_SYMBOLS2 -> {
                 evaluator.context()?.getString(R.string.key__view_symbols2)
             }
+            // WordTaker 符号页 category tabs (bottom row of the SYMBOLS2 keyboard). The
+            // RECENT tab renders a clock icon instead (see computeImageVector below).
+            KeyCode.SYM2_CAT_CJK -> "中"
+            KeyCode.SYM2_CAT_EN -> "EN"
+            KeyCode.SYM2_CAT_BRACKET -> "[]"
+            KeyCode.SYM2_CAT_CURRENCY -> "¥"
+            KeyCode.SYM2_CAT_MATH -> "数"
+            KeyCode.SYM2_CAT_DASH -> "(-)"
+            KeyCode.SYM2_CAT_CIRCLED -> "①"
             KeyCode.HALF_SPACE -> {
                 evaluator.context()?.getString(R.string.key__view_half_space)
             }
@@ -310,6 +320,10 @@ fun ComputingEvaluator.computeImageVector(data: KeyData): ImageVector? {
         }
         KeyCode.SETTINGS -> {
             Icons.Default.Settings
+        }
+        KeyCode.SYM2_CAT_RECENT -> {
+            // WordTaker 符号页「最近使用」tab — clock glyph.
+            Icons.Default.Schedule
         }
         KeyCode.SHIFT -> {
             when (evaluator.state.inputShiftState != InputShiftState.UNSHIFTED) {
