@@ -4,6 +4,29 @@ All notable changes to WordTaker (FlorisBoard fork) are documented here.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/) and
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **提示音音量单独调控**：设置首页「提示音」卡内新增音量滑杆（0–100%，默认 100% 与原响度一致），只作用于语音提示音（喵叫/开始/结束音），按键音不受影响；提示音开关关闭时维持不播。
+- **App 设置底部版本行**：主设置页最底部新增 `v{versionName} ({versionCode}) · {git短sha}` 弱化小字行，全部动态取自 BuildConfig，不硬编码。
+- **账户与额度同窗口子页**：App 主设置页新增「账户与额度」入口，同窗口切入账户子页（复用原账户页内容 Composable），左上返回箭头/系统返回键回设置页；`WordTakerAccountActivity` 保留用于微信 deep link 回跳兼容。补齐键盘内设置面板同款入口：点「账户与额度」不再跳转，面板内切子页展示只读云端额度（匿名可用）+ 刷新按钮 + 登录状态一行，只有点「登录/管理账户」才跳转到可输入的账户页（登录须要真实输入框，键盘自身面板无法承载），面板高度保持与键盘态严格等高、切换零跳动。
+
+### Changed
+- **录音不再自动结束（连续听写）**：停顿 ~1.2s 触发的 endpoint 只定稿该句并照常上屏，录音继续听、可连续多句；仅用户点击结束控件才结束录音返回键盘。切 App / 收键盘 / 输入框失焦仍立即停录（守卫不变）。
+- **录音界面小猫缩小 10%**：仅缩小猫图形本体，面板高度与布局逻辑不变。
+- **键盘字母键字号调小**：日/夜主题字母键 font-size 30sp→24sp（1:1 缩小）；回车/符号切换/中英切换等原钉 22sp 的键保持不变。
+- **设置按钮换回小猫头像**：键盘顶条左侧设置钮由田字格图标换回品牌小猫头像；白色圆底缩小到仅比猫头图形大 ~5dp，设置面板工具栏的小猫头像白圈同步缩小。
+- **顶条/工具栏圆钮白圈收紧**：录音（语音）钮与收起键盘钮的白色圆底统一为图标直径 +6dp，与小猫头像圈观感一致。
+- **录音界面小猫垂直居中 + 音符减半**：录音态小猫按猫体视觉中心校正、在键盘面板内真正垂直居中；头顶音符尺寸 ×0.5。
+
+### Fixed
+- **键盘各子界面切换跳动**：设置/历史面板高度改为与键盘态总高严格相等（keyboardUiHeight + 顶条差值），手写面板总高对齐键盘体高（墨迹区 = 键盘体高 − 功能行），模式切换用 120ms 淡入淡出替代瞬时替换 —— 键盘↔设置↔录音↔手写切换 IME 窗口高度零变化、零跳动。
+- **冷启动反复 ANR（D-1）**：进程冷启动时后台预热本地语音识别模型（ONNX 会话构建）以默认线程优先级运行，与主线程抢 CPU，在低配设备上造成 1–2 分钟主线程卡死、系统反复杀进程重启，且拖累扩展索引导致瞬时布局异常（devtools 报 `Extension ... not found`、手写面板错版、中/英键位误触）。现将模型加载线程与安装线程降为 `THREAD_PRIORITY_BACKGROUND`，并把扩展查找改为直接读取三个来源索引的最新值（不再等待有传播延迟的派生 `combine()` 流），消除该竞态窗口。
+- **冷启动反复 ANR（D-1，根因追加修复）**：上一版修复后复验仍有 ANR（IME 冷启动服务 ANR、设置 App 首屏 ANR），拉取 `/data/anr/` 现场 trace 定位到真正根因——`Application.onCreate()` 在主线程同步构造 `ClipboardManager`/`DictionaryManager`（二者构造期都读 `FlorisPreferenceStore`，触发一次性、reflection 构建的偏好模型类初始化），与同一 `onCreate()` 内并发启动、同样会触碰该类的后台协程（`FlorisPreferenceStore.initAndroid()`）形成 JVM 类初始化锁竞态；在低配/内存紧张设备上，败者线程（往往是主线程）会被卡住整个构建耗时，直接导致 IME 服务与设置 Activity（共用同一进程/主线程）双双 ANR。现把 `clipboardManager`/`DictionaryManager` 的初始化移入偏好库加载完成后的同一条后台协程顺序执行，`extensionManager` 的资源索引加载因不触碰该偏好类而单独提前于并行协程执行，主线程在 `onCreate()` 期间不再触碰该类。另修复初始化期点话筒无反馈：`SpeechEngine` 新增 `isReady()` 前置检查（麦克风权限 + 模型已落盘），未就绪时点击话筒立即提示「语音正在准备，请稍候」而不是显示一个实际未录音的假「正在倾听」界面。真实环境复验：3 轮「强杀进程→立即调出键盘打字/切中英/点话筒」+ 设置 App 冷启动 3 轮 + 60 秒连续点击锤测，均 0 ANR（`/data/anr/` 计数不变）、0 崩溃。
+- **冷启动反复 ANR（D-1，残留竞态收尾）**：上一版修复后复验仍偶发 1 例「executing service FlorisImeService」ANR，拉取现场 trace 定位到残留窗口——`clipboardManager`/`DictionaryManager` 已不再抢锁，但同一条后台协程里的 `FlorisPreferenceStore.initAndroid()` 调用仍是本进程内*第一次*触碰 `FlorisPreferenceStore`（从而触发一次性、reflection 构建的偏好模型类初始化）的地方；`FlorisImeService` 自身的字段初始化（`private val prefs by FlorisPreferenceStore`）在主线程构造该服务时也会各自独立触碰同一个类，若系统恰好在此窗口创建 IME 服务，主线程会卡在 JVM 类初始化监视锁上，在内存紧张、GC 暂停变长的设备上足以拖到 ANR 阈值。现在 `Application.onCreate()` 同步调用路径最前面提前、同步、在主线程把这次类初始化触发掉（只触发内存态模型构建，不含磁盘态 `initAndroid()` 的真实 I/O，那部分仍保留在后台协程异步执行）——由于 Android 保证 `Application.onCreate()` 必然先于本进程任何组件（含 `FlorisImeService`）创建完成，这从结构上排除了该类初始化锁被多线程同时争抢的可能，而不只是降低概率。真实环境复验：拉取 ANR 现场 trace 精确复现死锁链路（主线程等 `AppPrefsKt` 类监视锁，锁被后台协程执行 `FlorisPreferenceStore.initAndroid()` 持有）作为实证；修复后 12 次冷启动周期（含两套独立测试方法论）0 次复现该签名；期间出现的另外几例 ANR 经逐条拉取 trace 核实均为不同根因（标准框架 Binder IPC 调用、DEX 校验等系统级开销，非本应用业务代码），且测试后段模拟器本身进入系统级连锁 ANR（连 SystemUI 自身都反复 ANR），判定为该模拟器实例经数小时连续高强度测试后资源耗尽，非本次改动引入，已记录环境受限证据于 `docs/qa/RESULT-20260713-night4-r5.md`，建议后续在全新模拟器实例或真机复测确认。
+- **候选栏点按竞态崩溃（D-2）**：候选词点击/长按回调用合成期索引读取实时候选列表，若列表在点按派发前被清空/替换（如快速连打或删除拼音），抛 `IndexOutOfBoundsException` 致进程静默自杀重启（走自定义 CrashUtility，无 FATAL 日志）。现改为按索引重取并校验仍是同一候选，过期点按安全忽略。
+- **高频输入 IME ANR（D-2 压测，协程池饿死）**：输入洪峰（快速连打+长按退格+候选连点）下复现 `Input dispatching timed out` ANR，现场 trace 定位根因——`NlpManager.assembleCandidates()` 用 `runBlocking` 在 `Dispatchers.Default` worker 上同步等待，而每次候选写入（`internalSuggestions` observable）都会 `scope.launch` 一次该函数；洪峰下 4 个 CPU worker 全部被 `runBlocking` park 住，线程池饿死，主线程 `EditorInstance.deleteBackwards` 的 `runBlocking` 等不到调度直至 ANR（trace：主线程卡 `EditorInstance.kt:362`，4 个 `DefaultDispatcher-worker` 全卡 `NlpManager.kt:333`）。现将 `assembleCandidates` 改为 suspend 函数（所有调用点本就在协程内），不再阻塞任何 worker。真实环境复验：120 字符大 composing + 15s 候选连点 + 60 次退格连点 + 2×6s 退格长按的复现脚本 0 ANR；30s 候选点按压测 117 循环 0 ANR 0 崩溃、pid 稳定、候选上屏正常。另：首轮 QA 报告的那次 ANR（trace 卡 `HardwareRenderer.syncAndDrawFrame` 等 GPU fence，同期模拟器整机停滞、surfaceflinger 高占用）核实为模拟器 GPU 管线毛刺，非本应用缺陷。
+
 ## [0.37.0] - 2026-07-13
 
 首个真正公开发布的 Android 版本（此前仅本地调试包，从未上架）。

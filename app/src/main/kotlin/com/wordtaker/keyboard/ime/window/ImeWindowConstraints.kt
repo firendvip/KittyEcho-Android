@@ -136,8 +136,9 @@ sealed class ImeWindowConstraints(rootInsets: ImeInsets.Root) {
                 ImeFormFactor.Type.TABLET_LANDSCAPE -> 0.35f
                 ImeFormFactor.Type.TABLET_PORTRAIT -> 0.22f
                 ImeFormFactor.Type.PHONE_LANDSCAPE -> 0.47f
-                // WordTaker: matched to the A55 iOS reference — rows ~7% taller than the old 0.26.
-                ImeFormFactor.Type.PHONE_PORTRAIT -> 0.278f
+                // WordTaker: matched to the A55 iOS reference — total keyboard height ≈0.345
+                // of screen (顶栏62dp + 4行, 行距/屏宽≈0.149-0.151).
+                ImeFormFactor.Type.PHONE_PORTRAIT -> 0.2825f
             }
             (baselineScreen.height * factor).coerceIn(minKeyboardHeight, maxKeyboardHeight)
         }

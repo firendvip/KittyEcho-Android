@@ -16,7 +16,9 @@
 
 package com.wordtaker.keyboard.ime.window
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -100,7 +102,10 @@ import com.wordtaker.lib.snygg.ui.rememberSnyggThemeQuery
 // 微信风底部悬浮空隙 (dp): fixed 模式下键盘内容之下的固定空白，让键盘不贴屏幕最底。
 // 空隙渲染为键盘底色 (WindowInner 的 SnyggBox 背景铺满 padding 之外)，并计入 IME 窗口高度，
 // 故宿主 App 内容会被相应顶起、不被遮挡。
-private const val FIXED_BOTTOM_GAP_DP = 14
+private const val FIXED_BOTTOM_GAP_DP = 15
+
+// item3: 键盘↔设置↔历史等模式切换的淡入淡出时长 —— 高度已恒定，只做 120ms fade。
+private const val MODE_SWITCH_FADE_MS = 120
 
 @Composable
 fun ImeRootWindow() {
@@ -252,13 +257,29 @@ private fun ImeInnerWindow() {
             // item2: 在 TEXT/CAT_VOICE 单界面里，设置/语音/折叠图标已与睡猫合并到
             // CatKeyboardLayout 顶条同一行 —— 故此处不再额外渲染 ImeToolbar，避免出现两条。
             // 其余特殊模式 (媒体/剪贴/历史/设置) 仍需顶部工具栏做导航，保留 ImeToolbar。
-            when (state.imeUiMode) {
-                ImeUiMode.TEXT,
-                ImeUiMode.CAT_VOICE -> CatKeyboardLayout()
-                ImeUiMode.MEDIA -> { ImeToolbar(); ProvideActualLayoutDirection { MediaInputLayout() } }
-                ImeUiMode.CLIPBOARD -> { ImeToolbar(); ProvideActualLayoutDirection { ClipboardInputLayout() } }
-                ImeUiMode.HISTORY -> { ImeToolbar(); ProvideActualLayoutDirection { ImeHistoryLayout() } }
-                ImeUiMode.SETTINGS -> { ImeToolbar(); ProvideActualLayoutDirection { ImeSettingsLayout() } }
+            // item3: 各子界面总高已统一 (设置/历史面板 = keyboardUiHeight+15dp，工具栏44 +
+            // 面板 == 顶条59 + 键盘)，所以模式切换时窗口高度恒定；用 120ms 线性 Crossfade
+            // 替代瞬时内容替换，切换只有淡入淡出、零跳动。TEXT/CAT_VOICE 共用同一 surface
+            // key，二者互切不触发 crossfade (避免录音面板被重建)。
+            val surfaceKey = when (state.imeUiMode) {
+                ImeUiMode.TEXT, ImeUiMode.CAT_VOICE -> ImeUiMode.TEXT
+                else -> state.imeUiMode
+            }
+            Crossfade(
+                targetState = surfaceKey,
+                animationSpec = tween(durationMillis = MODE_SWITCH_FADE_MS),
+                label = "ime_mode_crossfade",
+            ) { mode ->
+                Column {
+                    when (mode) {
+                        ImeUiMode.TEXT,
+                        ImeUiMode.CAT_VOICE -> CatKeyboardLayout()
+                        ImeUiMode.MEDIA -> { ImeToolbar(); ProvideActualLayoutDirection { MediaInputLayout() } }
+                        ImeUiMode.CLIPBOARD -> { ImeToolbar(); ProvideActualLayoutDirection { ClipboardInputLayout() } }
+                        ImeUiMode.HISTORY -> { ImeToolbar(); ProvideActualLayoutDirection { ImeHistoryLayout() } }
+                        ImeUiMode.SETTINGS -> { ImeToolbar(); ProvideActualLayoutDirection { ImeSettingsLayout() } }
+                    }
+                }
             }
             ImeSystemUiFloating()
         }

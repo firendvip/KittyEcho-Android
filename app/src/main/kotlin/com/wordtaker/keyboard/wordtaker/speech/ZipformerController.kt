@@ -82,6 +82,13 @@ class ZipformerController(private val context: Context) {
         try {
             io.execute {
                 try {
+                    // D-1 fix: this native ONNX session build is genuinely CPU-heavy (up to
+                    // 4 native decode threads) and used to run at default/foreground thread
+                    // priority, directly starving the main thread on constrained devices and
+                    // causing multi-minute ANRs on cold start. Background priority lets the
+                    // OS scheduler throttle this thread under contention while leaving it at
+                    // full speed when the CPU is otherwise idle.
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
                     // Cap threads to available cores (min 4) to stay responsive.
                     val threads = minOf(4, Runtime.getRuntime().availableProcessors())
                     val featConfig = getFeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80)
@@ -204,6 +211,25 @@ class ZipformerController(private val context: Context) {
         } catch (t: Throwable) {
             Log.e(TAG, "feed failed", t)
             EMPTY_PARTIAL
+        }
+    }
+
+    /**
+     * 连续听写：endpoint 定稿一段后重置活动流（native reset 清空已解码文本与 endpoint
+     * 状态），流保持打开，后续音频继续解码为下一段。Worker thread only；无会话时 no-op。
+     */
+    fun resetSession() {
+        try {
+            lock.lock()
+            try {
+                val r = recognizer ?: return
+                val s = stream ?: return
+                r.reset(s)
+            } finally {
+                lock.unlock()
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "resetSession failed", t)
         }
     }
 

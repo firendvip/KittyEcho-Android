@@ -71,7 +71,7 @@
   "key": {
     "background": "var(--surface)",
     "foreground": "var(--on-surface)",
-    "font-size": "22sp",
+    "font-size": "24sp",
     "font-weight": "500",
     "shape": "var(--shape)",
     "shadow-elevation": "1.5dp",
@@ -86,6 +86,7 @@
     "foreground": "var(--on-surface)"
   },
   "key[code=10]": {
+    "font-size": "22sp",
     "background": "var(--accent)",
     "foreground": "var(--on-accent)"
   },
@@ -110,8 +111,11 @@
     "background": "#3A3A3C",
     "foreground": "#F2F2F7"
   },
+  "key[code=-227]": {
+    "font-size": "22sp"
+  },
   "key[code=-201,-202,-203]": {
-    "font-size": "16sp",
+    "font-size": "22sp",
     "font-weight": "500"
   },
   "key[code=-204,-205]": {

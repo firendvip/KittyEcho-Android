@@ -26,8 +26,9 @@ import kotlinx.coroutines.withContext
  *
  * Pipeline: the capture thread pushes float chunks into [queue]; a dedicated decode
  * worker drains it into the active Zipformer session, publishing live partials into
- * [partials] and firing [endpoints] once when trailing silence is detected. [stop]
- * flushes the session and returns the final transcript.
+ * [partials]. 连续听写：endpoint（尾部静音）命中时，worker 把该句定稿文本发到
+ * [segments]，随即 reset 解码流继续听下一句 —— 录音不停止。[stop]（用户点击结束）
+ * flushes the session and returns 最后一段未定稿的尾巴文本。
  *
  * Cold-start fallback: if the recognizer wasn't ready when [start] ran (first-use
  * warm-up still loading), the recorder still captures; [stop] then waits briefly for
@@ -46,8 +47,9 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
     private val _partials = MutableStateFlow("")
     override val partials: StateFlow<String> = _partials.asStateFlow()
 
-    private val _endpoints = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    override val endpoints: SharedFlow<Unit> = _endpoints.asSharedFlow()
+    // 连续听写：每句定稿文本（endpoint 触发）。容量放宽到 8，避免 VM 消费慢时丢句。
+    private val _segments = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    override val segments: SharedFlow<String> = _segments.asSharedFlow()
 
     // Chunk hand-off between the capture thread and the decode worker.
     private val queue = LinkedBlockingQueue<FloatArray>()
@@ -62,7 +64,6 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
     // Whether the CURRENT recording opened a live streaming session at start().
     @Volatile
     private var sessionOpened = false
-    private val endpointFired = AtomicBoolean(false)
 
     // P2-205 自愈：模型安装/预热可能在进程存活期间被再次需要（模型目录被清掉等），
     // 不能只在构造时跑一次。CAS 防并发重入；跑完复位，失败后下次触发可再试。
@@ -86,6 +87,11 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
     private fun ensureModelAsync() {
         if (!modelInstallRunning.compareAndSet(false, true)) return
         Thread {
+            // D-1 fix: background priority so the (first-run) 72MB asset copy and the
+            // zip.prepare() trigger below never compete with the main thread for CPU on
+            // constrained devices. See ZipformerController.prepare() for the actual heavy
+            // native load, which sets its own executor thread to background priority too.
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             try {
                 ModelAssetInstaller.ensureInstalled(context)
                 if (ModelDownloader.isDownloaded(context)) zip.prepare()
@@ -101,6 +107,11 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
 
+    // D-1: same two gates [start] itself checks before it will actually open the mic —
+    // exposed so the UI can pre-flight instead of flipping into a fake Recording state
+    // (see start()'s early-return branch below, which today opens no recorder at all).
+    override fun isReady(): Boolean = hasMicPermission() && ModelDownloader.isDownloaded(context)
+
     @SuppressLint("MissingPermission") // guarded by hasMicPermission()
     override fun start(suppressLeadingMs: Long) {
         if (!hasMicPermission()) return
@@ -109,7 +120,6 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
             return
         }
         _partials.value = ""
-        endpointFired.set(false)
         queue.clear()
 
         // Open the live session up front when the recognizer is ready; otherwise the
@@ -216,12 +226,18 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
                     lastPartial = partial.text
                     _partials.value = partial.text
                 }
-                if (partial.isEndpoint && partial.text.isNotBlank() &&
-                    endpointFired.compareAndSet(false, true)
-                ) {
-                    // Trailing silence after speech: tell the UI to finish this
-                    // recording. The engine keeps decoding until stop() arrives.
-                    _endpoints.tryEmit(Unit)
+                if (partial.isEndpoint) {
+                    // 连续听写：一句说完（尾部静音）→ 定稿该句发给 UI，reset 解码流
+                    // 继续听下一句。reset 与 feed 同在本线程，二者不会交错。空文本的
+                    // endpoint（纯静音，rule1）也 reset，保持检测器状态干净。
+                    val segment = partial.text.trim()
+                    zip.resetSession()
+                    lastPartial = ""
+                    _partials.value = ""
+                    if (segment.isNotBlank()) {
+                        Log.i(TAG, "segment finalized: ${segment.length} chars")
+                        _segments.tryEmit(segment)
+                    }
                 }
             }
         }.apply { isDaemon = true; name = "AsrDecodeWorker" }

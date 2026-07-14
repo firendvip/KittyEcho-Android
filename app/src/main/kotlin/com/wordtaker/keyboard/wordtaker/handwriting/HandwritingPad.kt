@@ -158,7 +158,9 @@ fun HandwritingInputLayout(modifier: Modifier = Modifier) {
         hadCandidates = has
     }
 
-    val padHeight = FlorisImeSizing.keyboardUiHeight()
+    // item3: 手写面板总高必须 == 普通键盘体高 (keyboardUiHeight)，否则切手写时 IME 窗口
+    // 会高出功能行一截 (48dp) 产生跳动。墨迹区 = keyboardUiHeight - 功能行高。
+    val padHeight = FlorisImeSizing.keyboardUiHeight() - FUNCTION_ROW_HEIGHT_DP.dp
 
     Column(
         modifier = modifier

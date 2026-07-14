@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -51,7 +53,9 @@ import com.wordtaker.keyboard.wordtaker.cat.CatState
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.settings.SettingsState
 import com.wordtaker.keyboard.wordtaker.speech.MicPermissionActivity
-import com.wordtaker.keyboard.wordtaker.toolbar.ToolbarIconButton
+import com.wordtaker.keyboard.wordtaker.toolbar.WT_TOOLBAR_CIRCLE_DARK
+import com.wordtaker.keyboard.wordtaker.toolbar.WT_TOOLBAR_ICON_TINT
+import com.wordtaker.keyboard.wordtaker.toolbar.WT_TOOLBAR_ICON_TINT_DARK
 import com.wordtaker.keyboard.wordtaker.ui.WordTakerSettingsActivity
 import com.wordtaker.lib.compose.conditional
 
@@ -226,11 +230,11 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
                             .padding(horizontal = STRIP_SIDE_PADDING_DP.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Left: 田-grid — opens the in-IME settings panel in place
+                        // Left: 小猫头像 (item4) — opens the in-IME settings panel in place
                         // (与原 ToolbarCatButton 相同的动作：切换 SETTINGS).
-                        ToolbarIconButton(
-                            iconRes = R.drawable.ic_wt_grid,
+                        StripCatButton(
                             contentDescription = "设置",
+                            dark = dark,
                             onClick = {
                                 val current = keyboardManager.activeState.imeUiMode
                                 keyboardManager.activeState.imeUiMode =
@@ -257,9 +261,10 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
                         // 药丸之后放弹性空白，把收起(折叠)图标顶到最右，右侧留空 (键盘底色)。
                         Spacer(modifier = Modifier.weight(1f))
                         // Right: collapse —— 收起键盘窗口。
-                        ToolbarIconButton(
+                        StripCircleButton(
                             iconRes = R.drawable.ic_wt_collapse,
                             contentDescription = "收起键盘",
+                            dark = dark,
                             onClick = { FlorisImeService.hideUi() },
                         )
                     }
@@ -321,7 +326,12 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
                 modifier = Modifier
                     .fillMaxWidth(lerpFloat(STRIP_CAT_WIDTH_FRACTION, RECORDING_CAT_WIDTH_FRACTION, activeAnim))
                     .height(boxHeight)
-                    .align(biasAlignment(bias)),
+                    .align(biasAlignment(bias))
+                    // item5: 猫精灵在盒内是底边锚定的 (CatSkin demo 世界，猫体视觉中心
+                    // ≈ 盒高 69% 处)，bias=0 只让「盒子」居中、猫本体偏下。把整盒按猫体
+                    // 视觉中心与盒中心的差值上移，使录音满态时猫在面板内真正垂直居中；
+                    // 随 activeAnim 渐进，过渡依旧平滑。
+                    .offset(y = -boxHeight * (CAT_VISUAL_CENTER_FRACTION * activeAnim)),
             )
         }
         }
@@ -460,6 +470,70 @@ private fun TalkPill(
     }
 }
 
+/**
+ * 顶栏白圆钮（微信/iOS 风）：36dp 白色圆底 + 居中线性图标。用 Box 而非 Material3
+ * IconButton，避免其最小触控目标(48dp)把圆底撑大 —— 尺寸即所见尺寸。
+ */
+@Composable
+private fun StripCircleButton(
+    iconRes: Int,
+    contentDescription: String?,
+    dark: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(STRIP_CIRCLE_BUTTON_DP.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(if (dark) WT_TOOLBAR_CIRCLE_DARK else androidx.compose.ui.graphics.Color.White)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.material3.Icon(
+            painter = androidx.compose.ui.res.painterResource(iconRes),
+            contentDescription = contentDescription,
+            tint = if (dark) WT_TOOLBAR_ICON_TINT_DARK else WT_TOOLBAR_ICON_TINT,
+            modifier = Modifier.size(STRIP_CIRCLE_ICON_DP.dp),
+        )
+    }
+}
+
+/**
+ * 顶栏小猫头像钮 (item4)：白圆底 + 品牌猫头 (保留自身彩色)。白圈只比猫头图形大
+ * ~5dp：猫头在 ic_brand_cat 的 100 视口里约占 66%，把矢量放大 STRIP_CAT_GLYPH_SCALE
+ * 倍后猫头直径 ≈ 0.66×1.25×30 ≈ 25dp，白圈 30dp。放大溢出的装饰边角被 CircleShape
+ * clip 裁掉，猫头本体不受影响。
+ */
+@Composable
+private fun StripCatButton(
+    contentDescription: String?,
+    dark: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(STRIP_CAT_BUTTON_DP.dp)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(if (dark) WT_TOOLBAR_CIRCLE_DARK else androidx.compose.ui.graphics.Color.White)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.material3.Icon(
+            painter = androidx.compose.ui.res.painterResource(R.drawable.ic_brand_cat),
+            contentDescription = contentDescription,
+            tint = androidx.compose.ui.graphics.Color.Unspecified,
+            modifier = Modifier
+                .size(STRIP_CAT_BUTTON_DP.dp)
+                .graphicsLayer {
+                    scaleX = STRIP_CAT_GLYPH_SCALE
+                    scaleY = STRIP_CAT_GLYPH_SCALE
+                },
+        )
+    }
+}
+
 // --- small animation helpers (avoid pulling in extra imports) ---
 private fun lerpFloat(a: Float, b: Float, t: Float) = a + (b - a) * t
 private fun lerpDp(a: androidx.compose.ui.unit.Dp, b: androidx.compose.ui.unit.Dp, t: Float) =
@@ -470,7 +544,14 @@ private fun biasAlignment(bias: Float) = androidx.compose.ui.BiasAlignment(0f, b
 // Top strip (待机 sleeping cat + 工具栏图标同一行) height — small, so the keyboard keeps
 // almost all the panel. The sleeping cat is bottom-anchored inside this strip; the icons
 // are vertically centred in the same row.
-private const val CAT_STRIP_HEIGHT_DP = 56
+// item3: 设置/历史面板需要引用它来对齐总高 (顶条 + 键盘 = 工具栏 + 面板)。
+internal const val CAT_STRIP_HEIGHT_DP = 59
+// item8: 白圆钮"抱紧"图标 —— 圆只比图标大 6dp (26 vs 20)，与设置态工具栏圆钮一致。
+private const val STRIP_CIRCLE_BUTTON_DP = 26
+private const val STRIP_CIRCLE_ICON_DP = 20
+// item4: 小猫头像钮 —— 30dp 白圆 + 矢量放大 1.25 倍，白圈 ≈ 猫头直径 + 5dp。
+private const val STRIP_CAT_BUTTON_DP = 30
+private const val STRIP_CAT_GLYPH_SCALE = 1.25f
 // item2: 猫尺寸按手机端调到合适大小 —— 在这一行里与 28dp 图标协调，不过大不过小。
 // 0.42→0.34 收窄睡猫宽度盒，使它在同一行里与图标比例和谐 (参考 CatSkinFx 头身比)。
 private const val STRIP_CAT_WIDTH_FRACTION = 0.34f
@@ -488,10 +569,14 @@ private val PILL_BG_DARK = androidx.compose.ui.graphics.Color(0xFF2E3033)
 private val PILL_FG_LIGHT = androidx.compose.ui.graphics.Color(0xFF6B6F73)
 private val PILL_FG_DARK = androidx.compose.ui.graphics.Color(0xFFBFC3C7)
 // Recording cat: large box centred over the whole panel (keyboard body height fraction).
-private const val RECORDING_CAT_FRACTION = 0.62f
-private const val RECORDING_CAT_WIDTH_FRACTION = 0.62f
-private const val CAT_BOX_MIN_DP = 130
-private const val CAT_BOX_MAX_DP = 200
+// 录音界面小猫整体缩小 10%（0.62→0.558，钳制值同步 ×0.9），布局逻辑不变。
+private const val RECORDING_CAT_FRACTION = 0.558f
+private const val RECORDING_CAT_WIDTH_FRACTION = 0.558f
+private const val CAT_BOX_MIN_DP = 117
+private const val CAT_BOX_MAX_DP = 180
+// item5: 猫体视觉中心 (demo-y≈50) 相对盒中心 (demo-y=36) 的偏差 / 盒高 (72) ≈ 0.19。
+// 录音满态把猫盒上移这个比例的盒高，使猫本体在面板内垂直居中。
+private const val CAT_VISUAL_CENTER_FRACTION = 0.19f
 private const val HINT_EDGE_PADDING_DP = 8
 // 流式实时字幕（阶段2）：底部居中，最多两行，位于"取消"药丸上方。
 private const val PARTIAL_MAX_LINES = 2

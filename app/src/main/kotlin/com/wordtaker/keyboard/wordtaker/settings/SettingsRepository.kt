@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -17,6 +18,8 @@ data class SettingsState(
     val tone: Boolean = DEFAULT_TONE,
     /** Which prompt-tone style plays on record start/end: "meow" (default) or "beep". */
     val toneStyle: String = DEFAULT_TONE_STYLE,
+    /** Voice prompt-tone volume, 0..100. Only scales the record start/end tones. */
+    val toneVolume: Int = DEFAULT_TONE_VOLUME,
     /** Reserved for a future minimal-UI mode. No UI yet. */
     val minimal: Boolean = DEFAULT_MINIMAL,
     /** Whether the speech-recognition model has been downloaded. */
@@ -27,6 +30,8 @@ data class SettingsState(
         const val DEFAULT_ROLE = "normal"
         const val DEFAULT_TONE = true
         const val DEFAULT_TONE_STYLE = "meow"
+        /** 100 == the pre-slider loudness, so existing users hear no change. */
+        const val DEFAULT_TONE_VOLUME = 100
         const val DEFAULT_MINIMAL = false
         const val DEFAULT_MODEL_DOWNLOADED = false
 
@@ -45,6 +50,7 @@ class SettingsRepository(private val context: Context) {
         val ROLE = stringPreferencesKey("role")
         val TONE = booleanPreferencesKey("tone")
         val TONE_STYLE = stringPreferencesKey("tone_style")
+        val TONE_VOLUME = intPreferencesKey("tone_volume")
         val MINIMAL = booleanPreferencesKey("minimal")
         val MODEL_DOWNLOADED = booleanPreferencesKey("model_downloaded")
     }
@@ -55,6 +61,7 @@ class SettingsRepository(private val context: Context) {
             role = prefs[Keys.ROLE] ?: SettingsState.DEFAULT_ROLE,
             tone = prefs[Keys.TONE] ?: SettingsState.DEFAULT_TONE,
             toneStyle = prefs[Keys.TONE_STYLE] ?: SettingsState.DEFAULT_TONE_STYLE,
+            toneVolume = prefs[Keys.TONE_VOLUME] ?: SettingsState.DEFAULT_TONE_VOLUME,
             minimal = prefs[Keys.MINIMAL] ?: SettingsState.DEFAULT_MINIMAL,
             modelDownloaded = prefs[Keys.MODEL_DOWNLOADED] ?: SettingsState.DEFAULT_MODEL_DOWNLOADED,
         )
@@ -74,6 +81,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setToneStyle(style: String) {
         context.settingsDataStore.edit { it[Keys.TONE_STYLE] = style }
+    }
+
+    suspend fun setToneVolume(volume: Int) {
+        context.settingsDataStore.edit { it[Keys.TONE_VOLUME] = volume.coerceIn(0, 100) }
     }
 
     suspend fun setMinimal(enabled: Boolean) {

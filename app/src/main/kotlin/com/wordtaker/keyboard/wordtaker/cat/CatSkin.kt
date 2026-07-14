@@ -58,8 +58,9 @@ private const val NOTE_MAX = 8
 private const val NOTE_SPAWN_NORMAL = 330f
 private const val NOTE_SPAWN_LOUD = 150f
 private const val NOTE_SPREAD = 14f
-private const val NOTE_SIZE_MIN = 11f
-private const val NOTE_SIZE_MAX = 15f
+// item5: 音符尺寸整体 ×0.5 (11..15 → 5.5..7.5)，其余节奏/散布参数不变。
+private const val NOTE_SIZE_MIN = 5.5f
+private const val NOTE_SIZE_MAX = 7.5f
 private const val NOTE_DX_MAX = 12f
 private const val NOTE_DY_MIN = -22f
 private const val NOTE_DY_MAX = -12f

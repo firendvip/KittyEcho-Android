@@ -118,13 +118,19 @@ fun CandidatesRow(modifier: Modifier = Modifier) {
                     displayMode = displayMode,
                     isFirst = n == 0,
                     onClick = {
-                        // Can't use candidate directly
-                        keyboardManager.commitCandidate(candidates[n])
+                        // Can't use candidate directly. The live list may have been cleared or
+                        // replaced between composition and click dispatch (D-2 race:
+                        // IndexOutOfBoundsException) — re-resolve by index and verify it is still
+                        // the same candidate; otherwise silently ignore the stale tap.
+                        candidates.getOrNull(n)
+                            ?.takeIf { it.text == candidate.text }
+                            ?.let { keyboardManager.commitCandidate(it) }
                     },
                     onLongPress = {
-                        // Can't use candidate directly
-                        val candidateItem = candidates[n]
-                        if (candidateItem.isEligibleForUserRemoval) {
+                        // Can't use candidate directly — same stale-tap guard as onClick.
+                        val candidateItem = candidates.getOrNull(n)
+                            ?.takeIf { it.text == candidate.text }
+                        if (candidateItem != null && candidateItem.isEligibleForUserRemoval) {
                             nlpManager.removeSuggestion(subtypeManager.activeSubtype, candidateItem)
                         } else {
                             false

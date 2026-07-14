@@ -329,29 +329,32 @@ class NlpManager(context: Context) {
         return runBlocking { getSuggestionProvider(subtype).getFrequencyForWord(subtype, word) }
     }
 
-    private fun assembleCandidates() {
-        runBlocking {
-            val candidates = when {
-                isSuggestionOn() -> {
-                    clipboardSuggestionProvider.suggest(
-                        subtype = Subtype.DEFAULT,
-                        content = editorInstance.activeContent,
-                        maxCandidateCount = 8,
-                        allowPossiblyOffensive = !prefs.suggestion.blockPossiblyOffensive.get(),
-                        isPrivateSession = keyboardManager.activeState.isIncognitoMode,
-                    ).ifEmpty {
-                        buildList {
-                            internalSuggestionsGuard.withLock {
-                                addAll(internalSuggestions.second)
-                            }
+    // suspend（而非 runBlocking）：所有调用点都已在协程内。此前 runBlocking 会把
+    // Dispatchers.Default 的 worker 整个 park 住；高频输入洪峰下（如快速点按候选/长按退格，
+    // 每次 internalSuggestions 写入都 launch 一次本函数）4 个 CPU worker 可被同时 park，
+    // 线程池饿死 → 主线程 deleteBackwards 的 runBlocking 等不到调度 → Input dispatching
+    // timed out ANR（2026-07-14 D-2 压测实录，trace 主线程卡 EditorInstance.deleteBackwards:362）。
+    private suspend fun assembleCandidates() {
+        val candidates = when {
+            isSuggestionOn() -> {
+                clipboardSuggestionProvider.suggest(
+                    subtype = Subtype.DEFAULT,
+                    content = editorInstance.activeContent,
+                    maxCandidateCount = 8,
+                    allowPossiblyOffensive = !prefs.suggestion.blockPossiblyOffensive.get(),
+                    isPrivateSession = keyboardManager.activeState.isIncognitoMode,
+                ).ifEmpty {
+                    buildList {
+                        internalSuggestionsGuard.withLock {
+                            addAll(internalSuggestions.second)
                         }
                     }
                 }
-                else -> emptyList()
             }
-            activeCandidates = candidates
-            autoExpandCollapseSmartbarActions(candidates, NlpInlineAutofill.suggestions.value)
+            else -> emptyList()
         }
+        activeCandidates = candidates
+        autoExpandCollapseSmartbarActions(candidates, NlpInlineAutofill.suggestions.value)
     }
 
     fun autoExpandCollapseSmartbarActions(list1: List<*>?, list2: List<*>?) {

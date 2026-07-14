@@ -13,7 +13,9 @@ import com.wordtaker.keyboard.wordtaker.speech.MicPermissionRequiredException
 import com.wordtaker.keyboard.wordtaker.speech.ModelNotReadyException
 import com.wordtaker.keyboard.wordtaker.speech.SpeechEngine
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -79,6 +81,17 @@ class VoiceViewModel(
     @Volatile
     private var cancelled = false
 
+    // 连续听写：本次录音是否已有分段定稿上屏（决定手动结束时空尾巴是否还提示"未识别到语音"）。
+    @Volatile
+    private var segmentCommitted = false
+
+    /** 一段待「润色→上屏→写历史」的原始文本；[ack] 供手动结束的尾巴等待自己完成。 */
+    private class CommitJob(val raw: String, val ack: CompletableDeferred<Unit>? = null)
+
+    // 串行提交管线：endpoint 分段与手动结束的尾巴都进同一条 FIFO 队列，由单个 worker
+    // 顺序处理，保证上屏顺序与说话顺序严格一致（即使润色很慢、分段积压）。
+    private val commitQueue = Channel<CommitJob>(Channel.UNLIMITED)
+
     init {
         // 流式 partial：录音中把引擎的实时字幕灌进 UI 状态（阶段2 边说边出字）。
         viewModelScope.launch {
@@ -89,12 +102,25 @@ class VoiceViewModel(
                 }
             }
         }
-        // 静音 endpoint：引擎检测到说完（尾部静音）→ 自动定稿，等价于用户点一下结束。
+        // 连续听写：endpoint 定稿一句 → 入串行提交队列（润色上屏），录音继续 ——
+        // 不自动结束、不回键盘；只有用户点击才结束录音。不按 phase 过滤：分段是录音中
+        // 说完的，即使处理时已进入 Recognizing 也须上屏；「取消」的丢弃语义由
+        // polishAndCommit 内的 cancelled 守卫负责。
         viewModelScope.launch {
-            speechEngine.endpoints.collect {
-                if (_state.value.phase == VoicePhase.Recording) {
-                    Log.d(TAG, "endpoint detected -> auto stop")
-                    stopAndProcess()
+            speechEngine.segments.collect { segment ->
+                Log.d(TAG, "segment finalized -> enqueue commit, keep listening")
+                // 入队即置位：手动结束时空尾巴据此判断"本次已有内容"，即使该段还在润色。
+                segmentCommitted = true
+                commitQueue.trySend(CommitJob(segment))
+            }
+        }
+        // 串行提交 worker：FIFO 逐条润色上屏。
+        viewModelScope.launch {
+            for (job in commitQueue) {
+                try {
+                    polishAndCommit(job.raw)
+                } finally {
+                    job.ack?.complete(Unit)
                 }
             }
         }
@@ -129,7 +155,7 @@ class VoiceViewModel(
         processJob = null
         runCatching { speechEngine.cancel() }
         val toneOn = settings.value.tone
-        toneController.endBeep(toneOn, settings.value.toneStyle)
+        toneController.endBeep(toneOn, settings.value.toneStyle, toneVolume())
         _state.value = VoiceUiState()
         Log.d(TAG, "cancel: aborted, reset to Idle")
     }
@@ -164,14 +190,68 @@ class VoiceViewModel(
         levelJob?.cancel()
         levelJob = null
         val toneOn = settings.value.tone
-        toneController.endBeep(toneOn, settings.value.toneStyle)
+        toneController.endBeep(toneOn, settings.value.toneStyle, toneVolume())
         runCatching { speechEngine.cancel() }
         _state.value = VoiceUiState()
         Log.d(TAG, "stopRecordingAndEndTone: discarded recording, reset to Idle")
     }
 
+    /** 语音提示音音量系数 0..1（用户滑杆，仅作用于喵叫/开始/结束音）。 */
+    private fun toneVolume(): Float = settings.value.toneVolume / 100f
+
+    /**
+     * 串行提交管线的单条处理：润色一段原始文本后上屏并写历史。endpoint 分段与手动
+     * 结束的尾巴都走这里（FIFO worker 顺序调用），上屏顺序与说话顺序严格一致。
+     * 润色失败/超时回退原文；用户点了「取消」则丢弃（不上屏不写历史）。
+     */
+    private suspend fun polishAndCommit(raw: String) {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank()) return
+        val role = settings.value.role
+        val polished: String = try {
+            withTimeout(POLISH_TIMEOUT_MS) { polisher.polish(trimmed, role) }
+                .also { Log.i(TAG, "polish: success") }
+        } catch (e: CancellationException) {
+            // withTimeout throws TimeoutCancellationException (subclass of CancellationException);
+            // catch it here to fall back to raw, then rethrow only if it's a true scope cancel.
+            if (e is kotlinx.coroutines.TimeoutCancellationException) {
+                Log.i(TAG, "polish: timeout after ${POLISH_TIMEOUT_MS}ms, falling back to raw")
+                trimmed
+            } else {
+                throw e  // true scope cancellation — propagate
+            }
+        } catch (e: Exception) {
+            Log.i(TAG, "polish: failure (${e.message}), falling back to raw")
+            trimmed
+        }
+        // 需求9：用户点了「取消」→ 即使已越过挂起点也不得上屏或写历史。
+        if (cancelled) {
+            Log.i(TAG, "commit skipped: cancelled by user")
+            return
+        }
+        // Commit FIRST (non-suspending tryEmit) so text is emitted even if the
+        // viewModelScope is cancelled before historyRepository.add completes.
+        _committed.tryEmit(polished)
+        Log.i(TAG, "commit emitted: ${polished.length} chars")
+        // Persist history — failure must not break the pipeline.
+        runCatching { historyRepository.add(trimmed, polished) }
+            .onSuccess { Log.d(TAG, "history: written") }
+            .onFailure { Log.i(TAG, "history: write failed: ${it.message}") }
+    }
+
     private fun startRecording() {
+        // D-1: 初始化期点话筒无反馈——engine.start() silently no-ops (no recorder opened)
+        // when the bundled model hasn't finished copying to disk yet, but this function
+        // used to flip the UI into a Recording state regardless, showing a live level
+        // meter that captures nothing. Pre-flight so the tap gets an immediate, honest
+        // response instead of a fake "listening" UI that only resolves on manual stop.
+        if (!speechEngine.isReady()) {
+            _toast.value = "语音正在准备，请稍候"
+            Log.d(TAG, "startRecording: engine not ready yet, showed hint")
+            return
+        }
         cancelled = false
+        segmentCommitted = false
         val toneOn = settings.value.tone
         // 顺序敏感（真机 vivo iQOO 8 实测得出，勿改回）：
         // 1) 先开麦克风再播提示音——提示音输出流启动若与录音通路建立同时发生，
@@ -181,7 +261,7 @@ class VoiceViewModel(
         // R3-011：提示音关闭时句首被吞已由采集音源改为 VOICE_COMMUNICATION 修复
         // （见 PcmRecorder 音源注释），无需任何声学预热；关提示音 = 全程无声。
         speechEngine.start(if (toneOn) TONE_GUARD_MS else 0L)
-        toneController.startBeep(toneOn, settings.value.toneStyle)
+        toneController.startBeep(toneOn, settings.value.toneStyle, toneVolume())
         _state.value = VoiceUiState(
             phase = VoicePhase.Recording,
             recording = true,
@@ -203,9 +283,10 @@ class VoiceViewModel(
     private fun stopAndProcess() {
         levelJob?.cancel()
         levelJob = null
-        // Sample tone on/off and style together so they can't drift mid-flight.
+        // Sample tone on/off, style and volume together so they can't drift mid-flight.
         val toneOn = settings.value.tone
         val toneStyle = settings.value.toneStyle
+        val toneVol = toneVolume()
         _state.value = _state.value.copy(
             phase = VoicePhase.Recognizing,
             recording = false,
@@ -245,50 +326,37 @@ class VoiceViewModel(
                 Log.d(TAG, "ASR result: ${raw.length} chars")
 
                 if (raw.isBlank()) {
+                    // 连续听写：分段已经上屏过 → 空尾巴属正常收尾，播结束音安静回键盘；
+                    // 整次录音一句都没识别到才提示"未识别到语音"。
+                    if (segmentCommitted) {
+                        toneController.endBeep(toneOn, toneStyle, toneVol)
+                        Log.d(TAG, "ASR: blank tail after committed segments -> Idle")
+                    } else {
+                        _toast.value = "未识别到语音"
+                        Log.d(TAG, "ASR: blank result -> Idle, showed hint")
+                    }
                     _state.value = VoiceUiState()
-                    _toast.value = "未识别到语音"
                     reachedTerminalState = true
-                    Log.d(TAG, "ASR: blank result -> Idle, showed hint")
                     return@launch
                 }
 
-                // Polishing phase
+                // Polishing phase — 尾巴入串行提交队列（排在所有已定稿分段之后），等它
+                // 完成后再收尾，保证上屏顺序与说话顺序一致。
                 _state.value = _state.value.copy(phase = VoicePhase.Polishing)
                 Log.d(TAG, "phase=Polishing")
-                val role = settings.value.role
-                val polished: String = try {
-                    withTimeout(POLISH_TIMEOUT_MS) { polisher.polish(raw, role) }
-                        .also { Log.i(TAG, "polish: success") }
-                } catch (e: CancellationException) {
-                    // withTimeout throws TimeoutCancellationException (subclass of CancellationException);
-                    // catch it here to fall back to raw, then rethrow only if it's a true scope cancel.
-                    if (e is kotlinx.coroutines.TimeoutCancellationException) {
-                        Log.i(TAG, "polish: timeout after ${POLISH_TIMEOUT_MS}ms, falling back to raw")
-                        raw
-                    } else {
-                        throw e  // true scope cancellation — propagate
-                    }
-                } catch (e: Exception) {
-                    Log.i(TAG, "polish: failure (${e.message}), falling back to raw")
-                    raw
-                }
+                val ack = CompletableDeferred<Unit>()
+                commitQueue.trySend(CommitJob(raw, ack))
+                ack.await()
 
-                // 需求9：若用户在识别/润色途中点了「取消」，即使已越过挂起点也不得上屏或写历史。
+                // 需求9：若用户在识别/润色途中点了「取消」，worker 已按 cancelled 丢弃，
+                // 这里不再走成功收尾。cancel() 已复位 UI。
                 if (cancelled) {
-                    Log.i(TAG, "commit skipped: cancelled by user")
+                    Log.i(TAG, "success path skipped: cancelled by user")
+                    reachedTerminalState = true
                     return@launch
                 }
-                // Commit FIRST (non-suspending tryEmit) so text is emitted even if the
-                // viewModelScope is cancelled before historyRepository.add completes.
-                _committed.tryEmit(polished)
-                Log.i(TAG, "commit emitted: ${polished.length} chars")
 
-                // Persist history — failure must not break the terminal-state guarantee.
-                runCatching { historyRepository.add(raw, polished) }
-                    .onSuccess { Log.d(TAG, "history: written") }
-                    .onFailure { Log.i(TAG, "history: write failed: ${it.message}") }
-
-                toneController.endBeep(toneOn, toneStyle)
+                toneController.endBeep(toneOn, toneStyle, toneVol)
 
                 // busy true -> false triggers the cat sparkle animation.
                 _state.value = _state.value.copy(phase = VoicePhase.Success, busy = false)

@@ -13,9 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
  * the streaming Zipformer) can be swapped without touching the UI layer.
  *
  * Streaming contract: between [start] and [stop], the engine pushes live partial
- * transcripts into [partials] (edge-to-edge, latest wins) and fires [endpoints]
- * once when its silence detector decides the user finished speaking. The UI reacts
- * to an endpoint by calling [stop] — the engine itself never self-stops.
+ * transcripts into [partials] (edge-to-edge, latest wins). 连续听写：每当静音检测器
+ * 判定一句说完（endpoint），引擎把该句定稿文本发到 [segments] 并自行重置解码流，
+ * 继续听下一句 —— 录音不停止。只有 UI 主动调用 [stop]（用户点击结束）才收尾，
+ * [stop] 返回最后一段未定稿的尾巴文本。
  */
 interface SpeechEngine {
     /**
@@ -28,17 +29,26 @@ interface SpeechEngine {
      */
     fun start(suppressLeadingMs: Long = 0L)
 
-    /** Stop capturing and return the recognized text. */
+    /** Stop capturing and return the recognized text (最后一段未定稿的尾巴). */
     suspend fun stop(): String
 
     /** Cancel an active recording without processing. */
     fun cancel()
 
+    /**
+     * Cheap, synchronous, non-blocking readiness check used by the UI to decide whether
+     * tapping the mic will actually start capturing audio right now. During the cold-start
+     * window (bundled model still being copied to disk on a background thread) this
+     * returns false so the caller can show an immediate "still preparing" toast instead of
+     * flipping into a Recording UI that silently captures nothing (D-1: 初始化期点话筒无反馈).
+     */
+    fun isReady(): Boolean
+
     /** Live partial transcript of the CURRENT recording ("" when idle). */
     val partials: StateFlow<String>
 
-    /** Fires when end-of-speech silence is detected (auto-finish signal). */
-    val endpoints: SharedFlow<Unit>
+    /** 连续听写：每检测到一句说完(endpoint)即发出该句定稿文本，录音继续。 */
+    val segments: SharedFlow<String>
 }
 
 /** Thrown by a real engine when RECORD_AUDIO has not been granted. */
@@ -53,8 +63,8 @@ class MockSpeechEngine : SpeechEngine {
     private val _partials = MutableStateFlow("")
     override val partials: StateFlow<String> = _partials.asStateFlow()
 
-    private val _endpoints = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    override val endpoints: SharedFlow<Unit> = _endpoints.asSharedFlow()
+    private val _segments = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    override val segments: SharedFlow<String> = _segments.asSharedFlow()
 
     override fun start(suppressLeadingMs: Long) {
         // No-op for the mock pipeline.
@@ -68,6 +78,8 @@ class MockSpeechEngine : SpeechEngine {
     override fun cancel() {
         // No-op for the mock pipeline.
     }
+
+    override fun isReady(): Boolean = true
 
     private companion object {
         const val RECOGNIZE_DELAY_MS = 1200L

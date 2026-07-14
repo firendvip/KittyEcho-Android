@@ -1,7 +1,9 @@
 package com.wordtaker.keyboard.wordtaker.toolbar
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,13 +13,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
@@ -104,13 +106,16 @@ fun ToolbarIconButton(
     modifier: Modifier = Modifier,
 ) {
     // P2-303: 深色模式下白色圆底刺眼、与周边不统一 —— 圆底/图标随系统深浅取色。
+    // item8: 用 Box 而非 Material3 IconButton —— IconButton 的最小触控目标(48dp)会把
+    // 白色圆底放大到 ~44dp+，与源码里写的 size 不符；Box 尺寸即所见尺寸。
     val dark = isSystemInDarkTheme()
-    IconButton(
-        onClick = onClick,
+    Box(
         modifier = modifier
             .size(WT_TOOLBAR_BUTTON_SIZE_DP.dp)
             .clip(CircleShape)
-            .background(if (dark) WT_TOOLBAR_CIRCLE_DARK else Color.White, CircleShape),
+            .background(if (dark) WT_TOOLBAR_CIRCLE_DARK else Color.White)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
         Icon(
             painter = painterResource(iconRes),
@@ -135,27 +140,32 @@ fun ToolbarCatButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    IconButton(
-        onClick = onClick,
+    // item4: 同 ToolbarIconButton，改用 Box 避免 IconButton 最小触控目标放大白圈。
+    Box(
         modifier = modifier
-            .size(WT_TOOLBAR_BUTTON_SIZE_DP.dp)
+            .size(WT_TOOLBAR_CAT_BUTTON_SIZE_DP.dp)
             .clip(CircleShape)
-            // P2-303: 同 ToolbarIconButton，深色模式用深色圆底（猫头自身彩色不变）。
+            // P2-303: 深色模式用深色圆底（猫头自身彩色不变）。
             .background(
                 if (isSystemInDarkTheme()) WT_TOOLBAR_CIRCLE_DARK else Color.White,
-                CircleShape,
-            ),
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
         Icon(
             painter = painterResource(R.drawable.ic_brand_cat),
             contentDescription = contentDescription,
-            // No tint: keep the cat's own colours. Inner padding shrinks the head so
-            // it doesn't touch the circle edge.
+            // No tint: keep the cat's own colours. item4: 白圈只比猫头图形大 ~4-5dp ——
+            // 猫头在 100 视口里约占 66%，把矢量放大 WT_TOOLBAR_CAT_GLYPH_SCALE 倍后
+            // 猫头直径 ≈ 0.66×1.25×25 ≈ 21dp，白圈 25dp，即「头像直径 + 约4dp」。
+            // 超出部分被外层 CircleShape clip 裁掉（只裁到装饰性边角，猫头不裁）。
             tint = Color.Unspecified,
             modifier = Modifier
-                .size(WT_TOOLBAR_BUTTON_SIZE_DP.dp)
-                .clip(CircleShape)
-                .padding(WT_TOOLBAR_CAT_INSET_DP.dp),
+                .size(WT_TOOLBAR_CAT_BUTTON_SIZE_DP.dp)
+                .graphicsLayer {
+                    scaleX = WT_TOOLBAR_CAT_GLYPH_SCALE
+                    scaleY = WT_TOOLBAR_CAT_GLYPH_SCALE
+                },
         )
     }
 }
@@ -164,10 +174,12 @@ internal val WT_TOOLBAR_ICON_TINT = Color(0xFF3C4043)
 // P2-303 深色模式配色：圆底与录音"取消"药丸同档深灰，图标转浅灰（与 TalkPill 前景一致）。
 internal val WT_TOOLBAR_CIRCLE_DARK = Color(0xFF2E3033)
 internal val WT_TOOLBAR_ICON_TINT_DARK = Color(0xFFBFC3C7)
-private const val TOOLBAR_HEIGHT_DP = 44
-// item(adjust2): 白色圆底"抱紧"图标 —— 圆只比图标每边大 ~3dp (27 vs 21)，更精致小巧。
-const val WT_TOOLBAR_BUTTON_SIZE_DP = 27
-const val WT_TOOLBAR_ICON_SIZE_DP = 21
-// item: 小猫头像在 28dp 白圆里的内缩，让猫头不贴圆边、视觉更小巧。
-const val WT_TOOLBAR_CAT_INSET_DP = 3
+// item3: 统一各子界面总高需要拿到工具栏高度 (ImeSettingsLayout/ImeHistoryLayout 引用)。
+const val TOOLBAR_HEIGHT_DP = 44
+// item8: 白色圆底"抱紧"图标 —— 圆只比图标大 6dp (26 vs 20)，与顶条圆钮尺寸一致。
+const val WT_TOOLBAR_BUTTON_SIZE_DP = 26
+const val WT_TOOLBAR_ICON_SIZE_DP = 20
+// item4: 小猫头像白圈 —— 25dp 圆 + 矢量放大 1.25 倍，白圈 ≈ 猫头直径 + 4dp。
+const val WT_TOOLBAR_CAT_BUTTON_SIZE_DP = 25
+const val WT_TOOLBAR_CAT_GLYPH_SCALE = 1.25f
 private const val BUTTON_GAP_DP = 10

@@ -23,20 +23,29 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wordtaker.keyboard.app.FlorisPreferenceStore
 import com.wordtaker.keyboard.ime.ImeUiMode
+import com.wordtaker.keyboard.ime.keyboard.FlorisImeSizing
 import com.wordtaker.keyboard.keyboardManager
+import com.wordtaker.keyboard.wordtaker.account.AccountResult
+import com.wordtaker.keyboard.wordtaker.toolbar.TOOLBAR_HEIGHT_DP
+import com.wordtaker.keyboard.wordtaker.voice.CAT_STRIP_HEIGHT_DP
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_HANDWRITING
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_QWERTY
@@ -44,6 +53,7 @@ import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_T9
 import com.wordtaker.keyboard.wordtaker.ui.ROLE_GAOEQ
 import com.wordtaker.keyboard.wordtaker.ui.ROLE_NORMAL
 import com.wordtaker.keyboard.wordtaker.ui.ROLE_VIBECODING
+import com.wordtaker.keyboard.wordtaker.ui.WordTakerAccountActivity
 import dev.patrickgold.jetpref.datastore.model.observeAsState
 import kotlinx.coroutines.launch
 
@@ -76,6 +86,10 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
         keyboardManager.activeState.imeUiMode = ImeUiMode.HISTORY
     }
 
+    // 账户与额度子页（补齐用户口径）: 面板内切子页展示只读额度 —— IME 无法给自身输入框打字，
+    // 所以登录表单不内嵌，只有点「登录/管理账户」才真正跳转 WordTakerAccountActivity。
+    var showAccountPage by rememberSaveable { mutableStateOf(false) }
+
     // item6: 整体配色对齐微信「+」面板 —— 外层浅灰底 + 卡片白底，分组清爽统一。
     // 浅色：外层浅灰 #F2F3F5、卡片纯白；深色：与键盘深灰协调。内容/功能不变，仅调背景与卡片观感。
     val dark = isSystemInDarkTheme()
@@ -84,10 +98,40 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
     val titleColor = if (dark) Color(0xFFE3E3E6) else Color(0xFF1B1B1F)
     val rowTextColor = if (dark) Color(0xFFE3E3E6) else Color(0xFF1B1B1F)
 
+    // item3: 面板高度与键盘态严格等高 —— 键盘态总高 = 顶条(59) + keyboardUiHeight，
+    // 设置态总高 = 工具栏(44) + 本面板。令 面板高 = keyboardUiHeight + (59-44)，
+    // 两种状态 IME 窗口高度完全一致，切换零跳动。
+    val panelHeight = FlorisImeSizing.keyboardUiHeight() +
+        (CAT_STRIP_HEIGHT_DP - TOOLBAR_HEIGHT_DP).dp
+
+    if (showAccountPage) {
+        ImeAccountSubPage(
+            modifier = modifier,
+            panelHeight = panelHeight,
+            panelBg = panelBg,
+            cardBg = cardBg,
+            titleColor = titleColor,
+            rowTextColor = rowTextColor,
+            onBack = { showAccountPage = false },
+            onOpenFullAccount = {
+                runCatching {
+                    context.startActivity(
+                        android.content.Intent(
+                            context,
+                            WordTakerAccountActivity::class.java,
+                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }
+                backToKeyboard()
+            },
+        )
+        return
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(PANEL_HEIGHT_DP.dp)
+            .height(panelHeight)
             .background(panelBg),
     ) {
         // Header: back arrow + minimal "设置" title.
@@ -140,24 +184,14 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(12.dp))
 
-            // 账户与额度 entry (阶段3) — IME 窗口内不便承载表单，跳转独立账户页。
+            // 账户与额度 entry — 面板内子页展示只读额度（不跳 Activity）；登录才跳转（见子页）。
             SectionLabel("账户")
             SettingsCard(cardBg) {
                 SelectRow(
                     title = "账户与额度",
                     selected = false,
                     textColor = rowTextColor,
-                    onClick = {
-                        runCatching {
-                            context.startActivity(
-                                android.content.Intent(
-                                    context,
-                                    com.wordtaker.keyboard.wordtaker.ui.WordTakerAccountActivity::class.java,
-                                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                        }
-                        backToKeyboard()
-                    },
+                    onClick = { showAccountPage = true },
                 )
             }
 
@@ -236,6 +270,167 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * 「账户与额度」面板内子页 —— 只读展示：云端剩余额度 + 刷新、登录状态一行。
+ * 键盘无法给自身设置面板的输入框打字，因此登录表单不内嵌；只有点击「登录/管理账户」
+ * 才会真正 startActivity 到 [WordTakerAccountActivity]（那里才有可输入的邮箱/验证码框）。
+ * 复用与主设置面板相同的 panelHeight，保证顶边像素在各态之间恒等、切换零跳动。
+ */
+@Composable
+private fun ImeAccountSubPage(
+    modifier: Modifier,
+    panelHeight: Dp,
+    panelBg: Color,
+    cardBg: Color,
+    titleColor: Color,
+    rowTextColor: Color,
+    onBack: () -> Unit,
+    onOpenFullAccount: () -> Unit,
+) {
+    val repo = remember { AppGraph.accountRepository }
+    val scope = rememberCoroutineScope()
+    val state by repo.state.collectAsState()
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var refreshing by remember { mutableStateOf(false) }
+
+    fun refresh() {
+        refreshing = true
+        scope.launch {
+            when (val r = repo.refreshQuota()) {
+                is AccountResult.Ok -> statusMessage = null
+                is AccountResult.Err -> statusMessage = r.message
+            }
+            refreshing = false
+        }
+    }
+
+    // 进入子页即拉一次额度（匿名可用，无需登录）。
+    LaunchedEffect(Unit) { refresh() }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(panelHeight)
+            .background(panelBg),
+    ) {
+        // Header: back arrow + "账户与额度" title — same shape as main settings header,
+        // so the top edge stays pixel-identical across states.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { onBack() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "返回设置",
+                    tint = titleColor,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.size(8.dp))
+            Text(
+                text = "账户与额度",
+                color = titleColor,
+                fontSize = 16.sp,
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp),
+        ) {
+            SectionLabel("云端额度")
+            SettingsCard(cardBg) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = state.quota?.cloudRemaining?.let { "$it 字" } ?: "— —",
+                            color = rowTextColor,
+                            fontSize = 20.sp,
+                        )
+                        val detail = state.quota?.let { q ->
+                            listOfNotNull(
+                                q.deviceRemaining?.let { "本机赠送 $it" },
+                                q.accountRemaining?.let { "账号余额 $it" },
+                            ).joinToString(" · ").ifBlank { null }
+                        }
+                        Text(
+                            text = detail ?: (statusMessage ?: "剩余可用云端润色字数"),
+                            color = rowTextColor.copy(alpha = 0.6f),
+                            fontSize = 12.sp,
+                        )
+                    }
+                    Text(
+                        text = if (refreshing) "刷新中…" else "刷新",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(enabled = !refreshing) { refresh() }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            SectionLabel("登录状态")
+            SettingsCard(cardBg) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (state.loggedIn) {
+                            state.account?.nickname
+                                ?: state.account?.email
+                                ?: state.account?.phone
+                                ?: "已登录"
+                        } else {
+                            "未登录"
+                        },
+                        color = rowTextColor,
+                        fontSize = 15.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // 唯一必要的跳转：登录须要真实输入框（邮箱/验证码），键盘自身面板无法承载。
+            SettingsCard(cardBg) {
+                SelectRow(
+                    title = if (state.loggedIn) "管理账户" else "登录 / 管理账户",
+                    selected = false,
+                    textColor = MaterialTheme.colorScheme.primary,
+                    onClick = onOpenFullAccount,
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
 /** White rounded card grouping a section's rows — mirrors WeChat「+」面板 card surfaces. */
 @Composable
 private fun SettingsCard(cardBg: Color, content: @Composable () -> Unit) {
@@ -305,5 +500,3 @@ private fun ToggleRow(title: String, checked: Boolean, textColor: Color, onCheck
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
-
-private const val PANEL_HEIGHT_DP = 260

@@ -80,20 +80,36 @@ class ToneController(private val appContext: Context? = null) {
     /**
      * Start tone. Gated by [enabled]. 需求#8：无论 [style] 为何，一律播放"喵"；
      * [style] 仅为兼容调用点而保留，不再区分。合成蜂鸣仅在 meow 播放失败时兜底。
+     *
+     * @param volume 语音提示音全局音量系数 0..1（用户滑杆），只作用于喵叫/开始/结束音。
      */
-    fun startBeep(enabled: Boolean = true, @Suppress("UNUSED_PARAMETER") style: String = SettingsState.DEFAULT_TONE_STYLE) {
+    fun startBeep(
+        enabled: Boolean = true,
+        @Suppress("UNUSED_PARAMETER") style: String = SettingsState.DEFAULT_TONE_STYLE,
+        volume: Float = 1f,
+    ) {
         if (!enabled) return
-        if (playMeow(MEOW_START_VOLUME)) return
-        play(buildTone(startFreq = 880f, endFreq = 880f, durationMs = 80))
+        val v = volume.coerceIn(0f, 1f)
+        if (v <= 0f) return
+        if (playMeow(MEOW_START_VOLUME * v)) return
+        play(buildTone(startFreq = 880f, endFreq = 880f, durationMs = 80), v)
     }
 
     /**
      * End tone. Gated by [enabled]. 需求#8：一律播放"喵"(略轻)；[style] 保留但忽略。
+     *
+     * @param volume 语音提示音全局音量系数 0..1（用户滑杆），只作用于喵叫/开始/结束音。
      */
-    fun endBeep(enabled: Boolean = true, @Suppress("UNUSED_PARAMETER") style: String = SettingsState.DEFAULT_TONE_STYLE) {
+    fun endBeep(
+        enabled: Boolean = true,
+        @Suppress("UNUSED_PARAMETER") style: String = SettingsState.DEFAULT_TONE_STYLE,
+        volume: Float = 1f,
+    ) {
         if (!enabled) return
-        if (playMeow(MEOW_END_VOLUME)) return
-        play(buildTone(startFreq = 660f, endFreq = 440f, durationMs = 120))
+        val v = volume.coerceIn(0f, 1f)
+        if (v <= 0f) return
+        if (playMeow(MEOW_END_VOLUME * v)) return
+        play(buildTone(startFreq = 660f, endFreq = 440f, durationMs = 120), v)
     }
 
     /** Plays the meow sample. Returns true if playback was dispatched. */
@@ -136,7 +152,7 @@ class ToneController(private val appContext: Context? = null) {
         return samples
     }
 
-    private fun play(samples: ShortArray) {
+    private fun play(samples: ShortArray, volume: Float = 1f) {
         try {
             val bytes = samples.size * 2
             val track = AudioTrack(
@@ -154,6 +170,7 @@ class ToneController(private val appContext: Context? = null) {
                 Log.w(TAG, "AudioTrack uninitialized; skipping tone")
                 return
             }
+            runCatching { track.setVolume(volume.coerceIn(0f, 1f)) }
             track.write(samples, 0, samples.size)
             track.setNotificationMarkerPosition(samples.size)
             track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {

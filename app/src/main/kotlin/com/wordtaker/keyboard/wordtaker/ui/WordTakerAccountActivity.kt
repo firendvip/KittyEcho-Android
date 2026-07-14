@@ -111,8 +111,12 @@ class WordTakerAccountActivity : ComponentActivity() {
     }
 }
 
+/**
+ * 账户/额度页内容。item6: 抽为可共用的 Composable —— App 主设置页 (MinimalSettingsScreen)
+ * 以同窗口子页方式内嵌它；本 Activity 仅保留给微信 deep link 回跳兼容。
+ */
 @Composable
-private fun AccountScreen(
+internal fun AccountScreen(
     repository: AccountRepository,
     onBack: () -> Unit,
 ) {

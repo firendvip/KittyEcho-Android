@@ -18,6 +18,7 @@ package com.wordtaker.keyboard.app.settings
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +70,7 @@ import com.wordtaker.keyboard.lib.compose.FlorisScreen
 import com.wordtaker.keyboard.lib.util.InputMethodUtils
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.settings.SettingsState
+import com.wordtaker.keyboard.wordtaker.ui.AccountScreen
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_QWERTY
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_T9
 import com.wordtaker.keyboard.wordtaker.ui.ROLE_GAOEQ
@@ -83,7 +87,24 @@ import kotlinx.coroutines.launch
  * About section (Mac-style copy) inline at the bottom.
  */
 @Composable
-fun MinimalSettingsScreen() = FlorisScreen {
+fun MinimalSettingsScreen() {
+    // item6: 「账户与额度」以同窗口子页承载 —— 不再 startActivity 跳独立 Activity。
+    // 子页复用 WordTakerAccountActivity 抽出的 AccountScreen 内容，左上返回箭头 +
+    // 系统返回键都回到设置主页。Activity 本身保留（微信 deep link 回跳兼容）。
+    var showAccountPage by rememberSaveable { mutableStateOf(false) }
+    if (showAccountPage) {
+        BackHandler { showAccountPage = false }
+        AccountScreen(
+            repository = AppGraph.accountRepository,
+            onBack = { showAccountPage = false },
+        )
+    } else {
+        MinimalSettingsMain(onOpenAccount = { showAccountPage = true })
+    }
+}
+
+@Composable
+private fun MinimalSettingsMain(onOpenAccount: () -> Unit) = FlorisScreen {
     title = "弦外小猫"
     navigationIconVisible = false
     previewFieldVisible = false
@@ -116,6 +137,14 @@ fun MinimalSettingsScreen() = FlorisScreen {
             // 启用 / 切换 / 麦克风授权 entries on the home page (#6).
             SettingsCard(cardBg) {
                 SetupEntriesSection()
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // item6: 账户与额度 —— 同窗口子页入口（不再跳独立 Activity）。
+            SectionLabel("账户")
+            SettingsCard(cardBg) {
+                AccountEntryRow(onClick = onOpenAccount)
             }
 
             Spacer(Modifier.height(20.dp))
@@ -155,6 +184,12 @@ fun MinimalSettingsScreen() = FlorisScreen {
                     checked = state.tone,
                     onCheckedChange = { scope.launch { repo.setTone(it) } },
                 )
+                if (state.tone) {
+                    ToneVolumeRow(
+                        volume = state.toneVolume,
+                        onVolumeChangeFinished = { scope.launch { repo.setToneVolume(it) } },
+                    )
+                }
                 ToggleRow(
                     title = "云词库联想",
                     subtitle = "打拼音时联网补充更多候选词，只上传拼音，不上传输入内容",
@@ -260,13 +295,43 @@ private fun AboutSection() {
     AboutLine("🔒 本地：转写文本只保存在本机，不存服务器、不用于训练。语音识别全程离线。")
     AboutLine("🗑 删除：历史记录可随时删除，即从本机彻底移除。")
 
-    // 版本 row — moved to the very bottom of the 关于 page, below 数据安全 (#5).
+    // item1: 版本行 —— 全动态取值 (versionName / versionCode / git 短 sha)，弱化样式
+    // (小字灰色居中)，永不硬编码版本字面量。
     Text(
-        text = "版本 ${BuildConfig.VERSION_NAME}",
-        fontSize = 14.sp,
+        text = "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · " +
+            BuildConfig.BUILD_COMMIT_HASH.take(GIT_SHORT_SHA_LEN),
+        fontSize = 12.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
         modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
     )
+}
+
+// item1: git 短 sha 长度（与 `git rev-parse --short` 默认一致）。
+private const val GIT_SHORT_SHA_LEN = 7
+
+/** item6: 「账户与额度」入口行 —— 标题 + 右侧箭头，点击进同窗口账户子页。 */
+@Composable
+private fun AccountEntryRow(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "账户与额度",
+            color = MaterialTheme.colorScheme.onSurface,
+            fontSize = 16.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "›",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 18.sp,
+        )
+    }
 }
 
 @Composable
@@ -352,6 +417,44 @@ private fun SelectableRow(
                 modifier = Modifier.size(22.dp),
             )
         }
+    }
+}
+
+/**
+ * 提示音音量行：标题 + 百分比 + 滑杆（0..100），仿 ToggleRow 布局，仅提示音开启时显示。
+ * 拖动中只更新本地状态，松手才写入 DataStore，避免高频写。
+ */
+@Composable
+private fun ToneVolumeRow(
+    volume: Int,
+    onVolumeChangeFinished: (Int) -> Unit,
+) {
+    // 以持久化值为初始；用户拖动期间以本地值为准，松手后写回。
+    var sliderValue by remember(volume) { mutableStateOf(volume.toFloat()) }
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "提示音音量",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 16.sp,
+            )
+            Text(
+                text = "${sliderValue.toInt()}%",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+            )
+        }
+        Slider(
+            value = sliderValue,
+            onValueChange = { sliderValue = it },
+            onValueChangeFinished = { onVolumeChangeFinished(sliderValue.toInt()) },
+            valueRange = 0f..100f,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
