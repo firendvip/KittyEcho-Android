@@ -93,7 +93,7 @@ open class KeyboardState protected constructor(open var rawValue: ULong) {
 
         // WordTaker: runtime 中/英 toggle on the main keyboard. When on, latin keys
         // commit directly (no pinyin composing / Chinese candidates).
-        const val F_IS_ENGLISH_MODE: ULong =                0x04000000u
+        const val F_IS_ENGLISH_MODE: ULong =                0x10000000u
 
         const val F_IS_RTL_LAYOUT_DIRECTION: ULong =        0x08000000u
 

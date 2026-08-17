@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,6 +75,8 @@ fun ImeHistoryLayout(modifier: Modifier = Modifier) {
 
     // #13: clearing all history requires a second confirmation to prevent accidental wipes.
     var showClearConfirm by remember { mutableStateOf(false) }
+    val deleteGuard = remember { SingleHistoryDeleteGuard() }
+    var pendingDelete by remember { mutableStateOf<HistoryEntity?>(null) }
 
     // item3: 与设置面板同规则 —— 面板高 = keyboardUiHeight + (顶条 - 工具栏44)，
     // 使 历史态总高 == 键盘态总高，切换零跳动。(batch3-A: 顶条已按屏宽比例化)
@@ -141,7 +144,11 @@ fun ImeHistoryLayout(modifier: Modifier = Modifier) {
                                 editorInstance.commitText(entry.polished)
                                 Toast.makeText(context, "已上屏", Toast.LENGTH_SHORT).show()
                             },
-                            onDelete = { scope.launch { repository.remove(entry.id) } },
+                            onDelete = {
+                                if (deleteGuard.request(entry.id)) {
+                                    pendingDelete = entry
+                                }
+                            },
                         )
                     }
                 }
@@ -159,6 +166,29 @@ fun ImeHistoryLayout(modifier: Modifier = Modifier) {
                     showClearConfirm = false
                     scope.launch { repository.clear() }
                     Toast.makeText(context, "已清空", Toast.LENGTH_SHORT).show()
+                },
+            )
+        }
+
+        pendingDelete?.let { target ->
+            HistoryDeleteConfirmation(
+                target = target,
+                palette = palette,
+                onDismiss = {
+                    deleteGuard.dismiss()
+                    pendingDelete = null
+                },
+                onConfirm = {
+                    deleteGuard.confirm()?.let { targetId ->
+                        pendingDelete = null
+                        scope.launch {
+                            try {
+                                repository.remove(targetId)
+                            } finally {
+                                deleteGuard.complete(targetId)
+                            }
+                        }
+                    }
                 },
             )
         }
@@ -197,6 +227,10 @@ private fun ImeHistoryCard(
     onPick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val deleteDescription = HistoryDeleteCopy.deleteActionDescription(
+        entry.id,
+        historyDeletePreview(entry.polished),
+    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -206,6 +240,15 @@ private fun ImeHistoryCard(
             .padding(start = 14.dp, top = 12.dp, bottom = 12.dp, end = 8.dp),
     ) {
         Column(modifier = Modifier.padding(end = 26.dp)) {
+            historyProcessingLabel(entry)?.let { label ->
+                Text(
+                    text = label,
+                    color = palette.textMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(3.dp))
+            }
             // AI-polished result (prominent) — this is what gets committed on tap.
             Text(
                 text = entry.polished,
@@ -234,12 +277,16 @@ private fun ImeHistoryCard(
                 .align(Alignment.TopEnd)
                 .size(24.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .clickable(onClick = onDelete),
+                .clickable(
+                    role = Role.Button,
+                    onClickLabel = deleteDescription,
+                    onClick = onDelete,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = Icons.Filled.Close,
-                contentDescription = "删除",
+                contentDescription = deleteDescription,
                 tint = palette.textMuted,
                 modifier = Modifier.size(15.dp),
             )

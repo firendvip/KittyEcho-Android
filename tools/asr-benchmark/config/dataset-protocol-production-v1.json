@@ -1,0 +1,114 @@
+{
+  "schema_version": "1.0",
+  "protocol_id": "protocol_000000000002",
+  "approval_status": "draft",
+  "profile": "production_confirmation",
+  "selection_authority": "production_confirmation",
+  "target_device": {
+    "platform": "android",
+    "physical_device": true,
+    "abi": "arm64-v8a",
+    "device_profile_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "required_conditions": [
+    "quiet_near", "noise", "fast", "slow", "immediate_start", "short",
+    "normal_short", "long", "proper_name_number", "code_switch", "accent"
+  ],
+  "minimum_unique_clips_per_condition": {
+    "quiet_near": 320,
+    "noise": 160,
+    "fast": 80,
+    "slow": 80,
+    "immediate_start": 80,
+    "short": 96,
+    "normal_short": 288,
+    "long": 96,
+    "proper_name_number": 120,
+    "code_switch": 80,
+    "accent": 80
+  },
+  "minimum_speaker_clusters": 6,
+  "minimum_session_clusters": 12,
+  "minimum_joint_clusters": 12,
+  "slice_cluster_minimums": {
+    "quiet_near": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "noise": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "fast": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "slow": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "immediate_start": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "short": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "normal_short": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "long": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "proper_name_number": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "code_switch": {"minimum_speakers": 4, "minimum_sessions": 8},
+    "accent": {"minimum_speakers": 2, "minimum_sessions": 4}
+  },
+  "preregistration": {
+    "initial_unique_pcm": 480,
+    "maximum_unique_pcm": 720,
+    "initial_speakers": 6,
+    "maximum_speakers": 10,
+    "sessions_per_speaker": 2,
+    "initial_sentences_per_session": 40,
+    "new_speaker_sentences_per_session": 30,
+    "minimum_session_gap_hours": 12,
+    "fresh_unseen_recordings_required": true,
+    "common_anchor_fraction": 0.5,
+    "coverage_fraction": 0.5,
+    "maximum_single_speaker_fraction": 0.25,
+    "proper_name_number_minimums": {"number": 60, "proper_name": 60},
+    "condition_definitions": {
+      "egc_counter_id": "chinese-latin-egc-v1",
+      "short_egc": [1, 6],
+      "normal_short_egc": [7, 30],
+      "long_egc_minimum": 31,
+      "immediate_start_maximum_ms": 300,
+      "fast_minimum_egc_per_second": 4.5,
+      "slow_maximum_egc_per_second": 2.5,
+      "code_switch_minimum_chinese_egc": 4,
+      "code_switch_minimum_english_words": 2,
+      "code_switch_english_word_counter_id": "nfkc-ascii-alpha-runs-v1",
+      "accent_must_be_natural_not_imitated": true
+    },
+    "mutually_exclusive_conditions": [
+      ["quiet_near", "noise"],
+      ["fast", "slow"],
+      ["short", "normal_short", "long"]
+    ],
+    "one_take_per_speaker_sentence": true,
+    "technical_rerecord_requires_new_id_and_reason": true,
+    "best_take_selection_prohibited": true,
+    "bootstrap": {
+      "primary_unit": "speaker",
+      "nested_units": ["session", "clip"],
+      "samples": 10000,
+      "confidence_level": 0.95,
+      "seed": 20260729
+    },
+    "sequential_extension": {
+      "enabled": true,
+      "ci_half_width_trigger": 0.005,
+      "increment_speakers": 2,
+      "increment_sessions_per_speaker": 2,
+      "increment_sentences_per_session": 30,
+      "increment_unique_pcm": 120
+    },
+    "replacement_rules": {
+      "minimum_absolute_cer_improvement": 0.005,
+      "maximum_slice_evidence_degradation": 0.02,
+      "keep_baseline_if_inconclusive_at_maximum": true
+    }
+  },
+  "exploration_pcm_set_sha256": null,
+  "required_source_kind": "local_target_device_recording",
+  "unique_pcm_required": true,
+  "bootstrap_unit": "speaker_nested_session_clip",
+  "telemetry": {
+    "sample_interval_ms": 5000,
+    "sample_interval_tolerance_ms": 250,
+    "sample_interval_tolerance_fraction": 0.05,
+    "minimum_duration_seconds": 600.0,
+    "minimum_decode_loops": 2,
+    "active_decode_progress_unit": "trusted_runner_progress_events_v1"
+  }
+}

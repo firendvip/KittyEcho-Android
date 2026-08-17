@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/external-observer-verification-v1.json",
+  "title": "KittyEcho synthetic external observer verification v1",
+  "description": "Committed proof that the observer contract was exercised with synthetic inputs. It never grants formal or product eligibility.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "model_alias",
+    "protocol_profile",
+    "observer_mode",
+    "assurance_level",
+    "observer_execution_verified",
+    "two_clean_process_repetitions_verified",
+    "independent_hash_contract_verified",
+    "formal_eligible",
+    "product_decision_eligible",
+    "adversarial_same_uid_resistant",
+    "blockers",
+    "observer_evidence_raw_sha256",
+    "observer_evidence_canonical_sha256",
+    "observer_challenge_sha256",
+    "known_release_sha256",
+    "host_clock_sha256",
+    "host_resource_policy_sha256",
+    "device_identity_commitment_sha256",
+    "source_receipt_commitments",
+    "android_commitments"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "pattern": "^run_[0-9a-f]{12}$"},
+    "model_alias": {"type": "string", "pattern": "^M[0-9]{3}$"},
+    "protocol_profile": {
+      "enum": ["exploration", "production_confirmation"]
+    },
+    "observer_mode": {"const": "synthetic_fixture_no_adb"},
+    "assurance_level": {"const": "observer_contract_synthetic"},
+    "observer_execution_verified": {"const": false},
+    "two_clean_process_repetitions_verified": {"const": true},
+    "independent_hash_contract_verified": {"const": true},
+    "formal_eligible": {"const": false},
+    "product_decision_eligible": {"const": false},
+    "adversarial_same_uid_resistant": {"const": false},
+    "blockers": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "observer_evidence_raw_sha256": {"$ref": "#/$defs/sha256"},
+    "observer_evidence_canonical_sha256": {"$ref": "#/$defs/sha256"},
+    "observer_challenge_sha256": {"$ref": "#/$defs/sha256"},
+    "known_release_sha256": {"$ref": "#/$defs/sha256"},
+    "host_clock_sha256": {"$ref": "#/$defs/sha256"},
+    "host_resource_policy_sha256": {"$ref": "#/$defs/sha256"},
+    "device_identity_commitment_sha256": {"$ref": "#/$defs/sha256"},
+    "source_receipt_commitments": {
+      "type": "object",
+      "minProperties": 4,
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    },
+    "android_commitments": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

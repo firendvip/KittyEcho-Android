@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/development-emulator-score-v1.json",
+  "title": "KittyEcho development-emulator dev96 score v1",
+  "description": "Development-only emulator score. It has no formal, product, or production authority and contains no raw reference or hypothesis text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "dataset_id", "model_alias",
+    "snapshot_fingerprint_sha256", "development_decoder_plan_sha256",
+    "normalization", "metrics", "clip_scores", "eligibility"
+  ],
+  "properties": {
+    "schema_version": {"const": "development-emulator-score-v1"},
+    "run_id": {"type": "string", "pattern": "^run_[0-9a-f]{12}$"},
+    "dataset_id": {"type": "string", "pattern": "^dataset_[0-9a-f]{12}$"},
+    "model_alias": {"type": "string", "pattern": "^M[0-9]{3}$"},
+    "snapshot_fingerprint_sha256": {"$ref": "#/$defs/sha256"},
+    "development_decoder_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_id", "config", "sha256"],
+      "properties": {
+        "profile_id": {"const": "zh-normalization-v1"},
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "profile_id", "unicode_form", "whitespace", "punctuation",
+            "latin_case", "numbers"
+          ],
+          "properties": {
+            "profile_id": {"const": "zh-normalization-v1"},
+            "unicode_form": {"enum": ["NONE", "NFC", "NFKC"]},
+            "whitespace": {"enum": ["remove", "collapse", "preserve"]},
+            "punctuation": {"enum": ["remove", "preserve"]},
+            "latin_case": {"enum": ["lower", "preserve"]},
+            "numbers": {"enum": ["unicode_decimal_to_ascii", "preserve"]}
+          }
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cer", "substitutions", "deletions", "insertions",
+        "reference_characters", "sentence_count", "sentence_exact_rate",
+        "status_counts"
+      ],
+      "properties": {
+        "cer": {"type": "number", "minimum": 0},
+        "substitutions": {"type": "integer", "minimum": 0},
+        "deletions": {"type": "integer", "minimum": 0},
+        "insertions": {"type": "integer", "minimum": 0},
+        "reference_characters": {"type": "integer", "minimum": 0},
+        "sentence_count": {"const": 96},
+        "sentence_exact_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "status_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ok", "error"],
+          "properties": {
+            "ok": {"type": "integer", "minimum": 0},
+            "error": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "clip_scores": {
+      "type": "array",
+      "minItems": 96,
+      "maxItems": 96,
+      "items": {"$ref": "#/$defs/clip_score"}
+    },
+    "eligibility": {"$ref": "#/$defs/eligibility"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "clip_score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clip_id", "cer", "substitutions", "deletions", "insertions",
+        "reference_characters", "exact", "status", "error_code",
+        "stop_to_final_ns"
+      ],
+      "properties": {
+        "clip_id": {"type": "string", "pattern": "^clip_[0-9a-f]{12}$"},
+        "cer": {"type": "number", "minimum": 0},
+        "substitutions": {"type": "integer", "minimum": 0},
+        "deletions": {"type": "integer", "minimum": 0},
+        "insertions": {"type": "integer", "minimum": 0},
+        "reference_characters": {"type": "integer", "minimum": 0},
+        "exact": {"type": "boolean"},
+        "status": {"enum": ["ok", "error"]},
+        "error_code": {
+          "type": ["string", "null"],
+          "enum": [null, "oom", "crash", "decode_error"]
+        },
+        "stop_to_final_ns": {"type": "integer", "minimum": 0}
+      }
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "development_only", "emulator_only", "formal_eligible",
+        "product_decision_eligible", "production_eligible"
+      ],
+      "properties": {
+        "development_only": {"const": true},
+        "emulator_only": {"const": true},
+        "formal_eligible": {"const": false},
+        "product_decision_eligible": {"const": false},
+        "production_eligible": {"const": false}
+      }
+    }
+  }
+}

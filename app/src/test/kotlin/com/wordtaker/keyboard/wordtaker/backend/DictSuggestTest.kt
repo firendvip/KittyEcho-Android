@@ -57,28 +57,31 @@ class DictSuggestTest : FunSpec({
         out[1].source shouldBe "cloud"
     }
 
-    test("skips candidate entries with blank text; keeps null source") {
+    test("skips blank text and treats a missing score as zero") {
         server.enqueue(
             MockResponse().setBody(
                 """{"success":true,"data":{"candidates":[
                    {"text":"","score":0.9},
-                   {"text":"喵","score":0.5}]}}""",
+                   {"text":"喵","score":0.5},
+                   {"text":"咪"}]}}""",
             ),
         )
 
         val out = client().dictSuggest("miao")
 
-        out shouldHaveSize 1
+        out shouldHaveSize 2
         out[0].text shouldBe "喵"
         out[0].score shouldBe 0.5
         out[0].source.shouldBeNull()
+        out[1].text shouldBe "咪"
+        out[1].score shouldBe 0.0
     }
 
     test("request carries contract path, method, headers and body fields") {
         server.enqueue(MockResponse().setBody("""{"success":true,"data":{"candidates":[]}}"""))
         token = "jwt-dict-1"
 
-        client().dictSuggest("nihao", limit = 5, prefix = true, context = "今天")
+        client().dictSuggest("nihao")
 
         val recorded = server.takeRequest()
         recorded.path shouldBe "/aiapi/dict/suggest"
@@ -89,19 +92,18 @@ class DictSuggestTest : FunSpec({
 
         val body = JSONObject(recorded.body.readUtf8())
         body.getString("pinyin") shouldBe "nihao"
-        body.getInt("limit") shouldBe 5
-        body.getBoolean("prefix") shouldBe true
-        body.getString("context") shouldBe "今天"
+        body.getInt("limit") shouldBe 10
+        body.getBoolean("prefix") shouldBe false
+        body.keys().asSequence().toSet() shouldBe setOf("pinyin", "limit", "prefix")
     }
 
-    test("blank context is omitted from the request body") {
-        server.enqueue(MockResponse().setBody("""{"success":true,"data":{"candidates":[]}}"""))
+    test("invalid or oversized requests fail closed before network I/O") {
+        client().dictSuggest("ni'hao").shouldBeEmpty()
+        client().dictSuggest("ni好").shouldBeEmpty()
+        client().dictSuggest("nihao", limit = 0).shouldBeEmpty()
+        client().dictSuggest("nihao", limit = 11).shouldBeEmpty()
 
-        client().dictSuggest("nihao")
-
-        val body = JSONObject(server.takeRequest().body.readUtf8())
-        body.has("context") shouldBe false
-        body.getBoolean("prefix") shouldBe false
+        server.requestCount shouldBe 0
     }
 
     test("timeout is swallowed and returns empty list") {
@@ -133,6 +135,39 @@ class DictSuggestTest : FunSpec({
         )
 
         client().dictSuggest("mei").shouldBeEmpty()
+    }
+
+    test("missing or non-boolean success fails closed") {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"data":{"candidates":[{"text":"缺失","score":0.9}]}}""",
+            ),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                """{"success":"true","data":{"candidates":[{"text":"错型","score":0.9}]}}""",
+            ),
+        )
+
+        client().dictSuggest("shi").shouldBeEmpty()
+        client().dictSuggest("xing").shouldBeEmpty()
+    }
+
+    test("candidate fields with invalid boundary types are discarded") {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"success":true,"data":{"candidates":[
+                   {"text":123,"score":0.9},
+                   {"text":"错分","score":"0.8"},
+                   {"text":"有效","score":0.7,"source":5}]}}""",
+            ),
+        )
+
+        val out = client().dictSuggest("youxiao")
+
+        out shouldHaveSize 1
+        out.single().text shouldBe "有效"
+        out.single().source.shouldBeNull()
     }
 
     test("network failure (connection dropped) is swallowed and returns empty list") {

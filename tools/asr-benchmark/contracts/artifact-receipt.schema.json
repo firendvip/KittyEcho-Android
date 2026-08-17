@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/artifact-receipt-v1.json",
+  "title": "KittyEcho committed JSON artifact receipt v1",
+  "description": "A validity marker published only after its content-addressed JSON payload and bound evidence pass every host checkpoint.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_type",
+    "artifact_kind",
+    "run_id",
+    "evidence_sha256",
+    "plan_sha256",
+    "artifact",
+    "receipt_identity",
+    "commit_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "receipt_type": {"const": "kittyecho-asr-json-artifact-v1"},
+    "artifact_kind": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,63}$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f]{12}$"
+    },
+    "evidence_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "canonical_sha256",
+        "st_dev",
+        "st_ino",
+        "size_bytes",
+        "mode",
+        "nlink"
+      ],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "canonical_sha256": {"$ref": "#/$defs/sha256"},
+        "st_dev": {"type": "integer", "minimum": 0},
+        "st_ino": {"type": "integer", "minimum": 0},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "mode": {"const": 256},
+        "nlink": {"const": 1}
+      }
+    },
+    "receipt_identity": {"$ref": "#/$defs/identity"},
+    "commit_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "st_dev",
+        "st_ino",
+        "size_bytes",
+        "mode",
+        "nlink"
+      ],
+      "properties": {
+        "st_dev": {"type": "integer", "minimum": 0},
+        "st_ino": {"type": "integer", "minimum": 0},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "mode": {"const": 256},
+        "nlink": {"const": 1}
+      }
+    }
+  }
+}

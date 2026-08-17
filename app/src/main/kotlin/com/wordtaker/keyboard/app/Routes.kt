@@ -54,6 +54,7 @@ import com.wordtaker.keyboard.app.settings.MinimalSettingsScreen
 import com.wordtaker.keyboard.app.settings.about.AboutScreen
 import com.wordtaker.keyboard.app.settings.about.ProjectLicenseScreen
 import com.wordtaker.keyboard.app.settings.about.ThirdPartyLicensesScreen
+import com.wordtaker.keyboard.app.settings.about.VoiceModelLicensesScreen
 import com.wordtaker.keyboard.app.settings.advanced.BackupScreen
 import com.wordtaker.keyboard.app.settings.advanced.OtherScreen
 import com.wordtaker.keyboard.app.settings.advanced.PhysicalKeyboardScreen
@@ -204,6 +205,10 @@ object Routes {
         @Serializable
         @Deeplink("settings/about/third-party-licenses")
         object ThirdPartyLicenses
+
+        @Serializable
+        @Deeplink("settings/about/voice-model-licenses")
+        object VoiceModelLicenses
     }
 
     object Devtools {
@@ -329,6 +334,7 @@ object Routes {
             composableWithDeepLink(Settings.About::class) { AboutScreen() }
             composableWithDeepLink(Settings.ProjectLicense::class) { ProjectLicenseScreen() }
             composableWithDeepLink(Settings.ThirdPartyLicenses::class) { ThirdPartyLicensesScreen() }
+            composableWithDeepLink(Settings.VoiceModelLicenses::class) { VoiceModelLicensesScreen() }
 
             composableWithDeepLink(Devtools.Home::class) { DevtoolsScreen() }
             composableWithDeepLink(Devtools.AndroidLocales::class) { AndroidLocalesScreen() }

@@ -1,5 +1,6 @@
 package com.wordtaker.keyboard.wordtaker.history
 
+import com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -38,13 +39,18 @@ class HistoryRepository(private val dao: HistoryDao) {
 
     fun search(q: String): Flow<List<HistoryEntity>> = dao.search(q)
 
-    suspend fun add(raw: String, polished: String) {
+    suspend fun add(
+        raw: String,
+        polished: String,
+        outcome: PolishOutcomeKind,
+    ) {
         ensureSeeded()
         dao.insert(
             HistoryEntity(
                 raw = raw,
                 polished = polished,
                 createdAt = System.currentTimeMillis(),
+                polishModel = historyPolishModel(outcome).storedValue,
             )
         )
     }

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/model-output-v1.json",
+  "title": "KittyEcho blind first-layer accuracy output v1",
+  "description": "Scorer-only output. Engineering, resource, latency, and runner evidence are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "model_alias", "decoder_contract_id",
+    "pcm_contract_id", "input_transform_id", "decoder_plan_sha256",
+    "reference_accessed", "predictions"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "pattern": "^run_[0-9a-f]{12}$"},
+    "model_alias": {"type": "string", "pattern": "^M[0-9]{3}$"},
+    "decoder_contract_id": {"const": "first-layer-raw-v1"},
+    "pcm_contract_id": {"const": "pcm16k-mono-s16le-v1"},
+    "input_transform_id": {"const": "canonical-pcm-direct-v1"},
+    "decoder_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "reference_accessed": {"const": false},
+    "predictions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/prediction"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "prediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clip_id", "pcm_sha256", "pcm_payload_sha256", "hypothesis",
+        "status", "error_code"
+      ],
+      "properties": {
+        "clip_id": {"type": "string", "pattern": "^clip_[0-9a-f]{12}$"},
+        "pcm_sha256": {"$ref": "#/$defs/sha256"},
+        "pcm_payload_sha256": {"$ref": "#/$defs/sha256"},
+        "hypothesis": {"type": "string", "maxLength": 100000},
+        "status": {"enum": ["ok", "error"]},
+        "error_code": {
+          "type": ["string", "null"],
+          "enum": [null, "oom", "crash", "decode_error"]
+        }
+      }
+    }
+  }
+}

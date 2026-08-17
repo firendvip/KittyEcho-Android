@@ -125,5 +125,11 @@ fun AboutScreen() = FlorisScreen {
             summary = stringRes(id = R.string.about__third_party_licenses__summary),
             onClick = { navController.navigate(Routes.Settings.ThirdPartyLicenses) },
         )
+        Preference(
+            icon = Icons.Outlined.Description,
+            title = "语音模型与许可证",
+            summary = "Paraformer、上游模型与 sherpa-onnx 的来源和离线许可证",
+            onClick = { navController.navigate(Routes.Settings.VoiceModelLicenses) },
+        )
     }
 }

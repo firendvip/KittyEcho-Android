@@ -16,24 +16,27 @@ data class SettingsState(
     val skin: String = DEFAULT_SKIN,
     val role: String = DEFAULT_ROLE,
     val tone: Boolean = DEFAULT_TONE,
-    /** Which prompt-tone style plays on record start/end: "meow" (default) or "beep". */
+    /** Which legacy prompt-tone style is retained for end-tone preference compatibility. */
     val toneStyle: String = DEFAULT_TONE_STYLE,
-    /** Voice prompt-tone volume, 0..100. Only scales the record start/end tones. */
+    /** Voice prompt-tone volume, 0..100. Only scales the record end tone. */
     val toneVolume: Int = DEFAULT_TONE_VOLUME,
     /** Reserved for a future minimal-UI mode. No UI yet. */
     val minimal: Boolean = DEFAULT_MINIMAL,
     /** Whether the speech-recognition model has been downloaded. */
     val modelDownloaded: Boolean = DEFAULT_MODEL_DOWNLOADED,
+    /** Never send locally recognized voice text to cloud polishing. */
+    val localRecognitionOnly: Boolean = DEFAULT_LOCAL_RECOGNITION_ONLY,
 ) {
     companion object {
         const val DEFAULT_SKIN = "cat"
         const val DEFAULT_ROLE = "normal"
         const val DEFAULT_TONE = true
         const val DEFAULT_TONE_STYLE = "meow"
-        /** 100 == the pre-slider loudness, so existing users hear no change. */
-        const val DEFAULT_TONE_VOLUME = 100
+        /** New users start at a quiet but audible prompt-tone level. */
+        const val DEFAULT_TONE_VOLUME = 30
         const val DEFAULT_MINIMAL = false
         const val DEFAULT_MODEL_DOWNLOADED = false
+        const val DEFAULT_LOCAL_RECOGNITION_ONLY = false
 
         /** Prompt-tone style identifiers. */
         const val TONE_MEOW = "meow"
@@ -41,9 +44,18 @@ data class SettingsState(
     }
 }
 
+/** Resolves the persisted 0..100 slider value without migrating or overwriting existing users. */
+internal fun resolveToneVolume(stored: Int?): Int =
+    (stored ?: SettingsState.DEFAULT_TONE_VOLUME).coerceIn(0, 100)
+
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "wt_settings")
 
-class SettingsRepository(private val context: Context) {
+/** Read-only settings boundary for consumers that only observe settings. */
+interface SettingsSource {
+    val settings: Flow<SettingsState>
+}
+
+class SettingsRepository(private val context: Context) : SettingsSource {
 
     private object Keys {
         val SKIN = stringPreferencesKey("skin")
@@ -53,17 +65,20 @@ class SettingsRepository(private val context: Context) {
         val TONE_VOLUME = intPreferencesKey("tone_volume")
         val MINIMAL = booleanPreferencesKey("minimal")
         val MODEL_DOWNLOADED = booleanPreferencesKey("model_downloaded")
+        val LOCAL_RECOGNITION_ONLY = booleanPreferencesKey("local_recognition_only")
     }
 
-    val settings: Flow<SettingsState> = context.settingsDataStore.data.map { prefs ->
+    override val settings: Flow<SettingsState> = context.settingsDataStore.data.map { prefs ->
         SettingsState(
             skin = prefs[Keys.SKIN] ?: SettingsState.DEFAULT_SKIN,
             role = prefs[Keys.ROLE] ?: SettingsState.DEFAULT_ROLE,
             tone = prefs[Keys.TONE] ?: SettingsState.DEFAULT_TONE,
             toneStyle = prefs[Keys.TONE_STYLE] ?: SettingsState.DEFAULT_TONE_STYLE,
-            toneVolume = prefs[Keys.TONE_VOLUME] ?: SettingsState.DEFAULT_TONE_VOLUME,
+            toneVolume = resolveToneVolume(prefs[Keys.TONE_VOLUME]),
             minimal = prefs[Keys.MINIMAL] ?: SettingsState.DEFAULT_MINIMAL,
             modelDownloaded = prefs[Keys.MODEL_DOWNLOADED] ?: SettingsState.DEFAULT_MODEL_DOWNLOADED,
+            localRecognitionOnly = prefs[Keys.LOCAL_RECOGNITION_ONLY]
+                ?: SettingsState.DEFAULT_LOCAL_RECOGNITION_ONLY,
         )
     }
 
@@ -84,7 +99,7 @@ class SettingsRepository(private val context: Context) {
     }
 
     suspend fun setToneVolume(volume: Int) {
-        context.settingsDataStore.edit { it[Keys.TONE_VOLUME] = volume.coerceIn(0, 100) }
+        context.settingsDataStore.edit { it[Keys.TONE_VOLUME] = resolveToneVolume(volume) }
     }
 
     suspend fun setMinimal(enabled: Boolean) {
@@ -93,5 +108,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setModelDownloaded(downloaded: Boolean) {
         context.settingsDataStore.edit { it[Keys.MODEL_DOWNLOADED] = downloaded }
+    }
+
+    suspend fun setLocalRecognitionOnly(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.LOCAL_RECOGNITION_ONLY] = enabled }
     }
 }

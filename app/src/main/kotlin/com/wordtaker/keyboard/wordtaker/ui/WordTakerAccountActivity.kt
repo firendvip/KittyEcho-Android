@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.wordtaker.keyboard.wordtaker.account.AccountProfileState
 import com.wordtaker.keyboard.wordtaker.account.AccountRepository
 import com.wordtaker.keyboard.wordtaker.account.AccountResult
 import com.wordtaker.keyboard.wordtaker.backend.BackendConfig
@@ -130,13 +131,12 @@ internal fun AccountScreen(
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
     }
 
-    // 进入页面即拉一次额度（匿名可用）；登录态变化时再刷。
+    // 进入页面即拉一次额度（匿名可用）；账号资料由 repository 自主 hydrate。
     LaunchedEffect(state.loggedIn) {
         when (val r = repository.refreshQuota()) {
             is AccountResult.Ok -> statusMessage = null
             is AccountResult.Err -> statusMessage = r.message
         }
-        if (state.loggedIn) repository.refreshAccount()
     }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
@@ -209,14 +209,13 @@ private fun QuotaSection(
     }
 }
 
-// —— 未登录：邮箱验证码 + 微信 ——
+// —— 未登录：邮箱验证码 ——
 
 @Composable
 private fun LoginSection(
     repository: AccountRepository,
     onMessage: (String) -> Unit,
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var email by rememberSaveable { mutableStateOf("") }
     var code by rememberSaveable { mutableStateOf("") }
@@ -300,32 +299,6 @@ private fun LoginSection(
                     Text("登录")
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        when (val r = repository.wechatAuthUrl()) {
-                            is AccountResult.Ok -> {
-                                val url = r.value.url
-                                if (url.isBlank()) {
-                                    onMessage("微信登录暂不可用")
-                                } else {
-                                    runCatching {
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(url)),
-                                        )
-                                    }.onFailure { onMessage("无法打开浏览器") }
-                                }
-                            }
-                            is AccountResult.Err -> onMessage(r.message)
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("微信登录")
-            }
-            Spacer(Modifier.height(4.dp))
             Text(
                 text = "未登录也可使用：本机自带免费云端额度",
                 fontSize = 12.sp,
@@ -351,29 +324,59 @@ private fun LoggedInSection(
     SectionLabel("账号")
     Card {
         Column {
-            val account = state.account
-            Text(
-                text = account?.nickname
-                    ?: account?.email
-                    ?: account?.phone
-                    ?: "已登录",
-                fontSize = 16.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            account?.inviteCode?.let { invite ->
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            when (val profile = state.profile) {
+                AccountProfileState.Loading -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        Modifier.height(18.dp).width(18.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("账号资料加载中…")
+                }
+                is AccountProfileState.Unavailable -> Column {
                     Text(
-                        text = "邀请码：$invite",
+                        text = profile.message,
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = {
-                        clipboard.setText(AnnotatedString(invite))
-                        onMessage("邀请码已复制")
-                    }) { Text("复制") }
+                        scope.launch {
+                            when (val result = repository.refreshAccount()) {
+                                is AccountResult.Ok -> onMessage("账号资料已更新")
+                                is AccountResult.Err -> onMessage(result.message)
+                            }
+                        }
+                    }) { Text("重试") }
                 }
+                is AccountProfileState.Available -> {
+                    val account = profile.account
+                    Text(
+                        text = account.nickname
+                            ?: account.email
+                            ?: account.phone
+                            ?: "已登录",
+                        fontSize = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    account.inviteCode?.let { invite ->
+                        Spacer(Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "邀请码：$invite",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = {
+                                clipboard.setText(AnnotatedString(invite))
+                                onMessage("邀请码已复制")
+                            }) { Text("复制") }
+                        }
+                    }
+                }
+                AccountProfileState.SignedOut -> Text("登录状态已失效")
             }
             Spacer(Modifier.height(4.dp))
             TextButton(onClick = {

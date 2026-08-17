@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/model-registry-v1.json",
+  "title": "KittyEcho ASR model registry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "formal_cohorts", "models"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "formal_cohorts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/formal_cohort"}
+    },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/model"}
+    }
+  },
+  "$defs": {
+    "formal_cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cohort_id", "profiles", "model_ids", "baseline_model_id"],
+      "properties": {
+        "cohort_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_]{1,63}$"},
+        "profiles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["exploration", "production_confirmation"]}
+        },
+        "model_ids": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_]{1,63}$"}
+        },
+        "baseline_model_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_]{1,63}$"
+        }
+      }
+    },
+    "sha256_or_null": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "immutable_revision": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{1,79}/[A-Za-z0-9][A-Za-z0-9._/-]{2,175}$"
+        }
+      ]
+    },
+    "https_url": {"type": "string", "pattern": "^https://"},
+    "license_component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx_id", "url", "verification_state"],
+      "properties": {
+        "spdx_id": {"type": "string", "minLength": 1},
+        "url": {"$ref": "#/$defs/https_url"},
+        "verification_state": {
+          "enum": ["verified", "pending", "blocked", "not_applicable"]
+        },
+        "notice": {"type": "string", "minLength": 1}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filename", "component", "expected_bytes", "sha256", "verification_state",
+        "source_url", "source_revision", "source_revision_kind"
+      ],
+      "properties": {
+        "filename": {"type": "string", "pattern": "^[^/]+$"},
+        "component": {"enum": ["weights", "conversion", "runtime", "tokenizer"]},
+        "expected_bytes": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1},
+            {"type": "null"}
+          ]
+        },
+        "sha256": {"$ref": "#/$defs/sha256_or_null"},
+        "verification_state": {
+          "enum": [
+            "locally_verified",
+            "publisher_verified",
+            "post_download_freeze_required"
+          ]
+        },
+        "source_url": {"$ref": "#/$defs/https_url"},
+        "source_revision": {"$ref": "#/$defs/immutable_revision"},
+        "source_revision_kind": {"enum": ["commit", "release_asset"]}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_id", "display_name", "role", "family", "official_source", "licenses",
+        "estimated_total_resource_bytes", "download_status", "runtime", "artifacts",
+        "evaluation_policy", "provenance"
+      ],
+      "properties": {
+        "model_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_]{1,63}$"},
+        "display_name": {"type": "string", "minLength": 1},
+        "role": {
+          "enum": ["baseline", "first_batch_candidate", "second_batch_candidate"]
+        },
+        "family": {"type": "string", "minLength": 1},
+        "official_source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["publisher", "model_url", "revision", "revision_kind"],
+          "properties": {
+            "publisher": {"type": "string", "minLength": 1},
+            "model_url": {"$ref": "#/$defs/https_url"},
+            "artifact_url": {"$ref": "#/$defs/https_url"},
+            "revision": {"$ref": "#/$defs/immutable_revision"},
+            "revision_kind": {"enum": ["commit", "release_asset"]}
+          }
+        },
+        "licenses": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "upstream_weights", "conversion", "runtime", "tokenizer", "notice"
+          ],
+          "properties": {
+            "upstream_weights": {"$ref": "#/$defs/license_component"},
+            "conversion": {"$ref": "#/$defs/license_component"},
+            "runtime": {"$ref": "#/$defs/license_component"},
+            "tokenizer": {"$ref": "#/$defs/license_component"},
+            "notice": {"$ref": "#/$defs/license_component"}
+          }
+        },
+        "estimated_total_resource_bytes": {"type": "integer", "minimum": 0},
+        "download_status": {
+          "enum": ["not_downloaded", "already_present_hash_verified"]
+        },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "framework", "format", "supported_abis",
+            "android_runtime_compatibility", "preprocessor_contract"
+          ],
+          "properties": {
+            "framework": {"type": "string", "minLength": 1},
+            "format": {"type": "string", "minLength": 1},
+            "android_runtime_compatibility": {
+              "enum": ["locally_verified", "compile_pending", "blocked"]
+            },
+            "preprocessor_contract": {
+              "type": "string",
+              "minLength": 1
+            },
+            "supported_abis": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "contains": {"const": "arm64-v8a"},
+              "items": {"type": "string"}
+            }
+          }
+        },
+        "evaluation_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "internal_evaluation_download",
+            "production_distribution"
+          ],
+          "properties": {
+            "internal_evaluation_download": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "clearance", "user_risk_acceptance", "restrictions"
+              ],
+              "properties": {
+                "clearance": {
+                  "enum": ["cleared", "requires_user_risk_acceptance"]
+                },
+                "user_risk_acceptance": {
+                  "enum": ["not_required", "pending", "accepted"]
+                },
+                "restrictions": {
+                  "type": "array",
+                  "prefixItems": [
+                    {"const": "repository_external_only"},
+                    {"const": "private_device_only"},
+                    {"const": "no_redistribution"},
+                    {"const": "no_upload"}
+                  ],
+                  "items": false,
+                  "minItems": 4,
+                  "maxItems": 4
+                }
+              }
+            },
+            "production_distribution": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["clearance"],
+              "properties": {
+                "clearance": {
+                  "enum": [
+                    "blocked_pending_separate_review",
+                    "cleared_by_product_decision"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/artifact"}
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["upstream_model_id", "checkpoint_byte_equivalence", "note"],
+          "properties": {
+            "upstream_model_id": {"type": "string", "minLength": 1},
+            "checkpoint_byte_equivalence": {
+              "enum": ["verified", "not_proven", "not_applicable"]
+            },
+            "note": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    }
+  }
+}

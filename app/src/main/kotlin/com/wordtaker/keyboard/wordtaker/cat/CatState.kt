@@ -8,6 +8,8 @@ import androidx.compose.runtime.Immutable
  *  - [level]     -> setLevel(v)
  *  - [busy]      -> setBusy(b)
  *  - [error]     -> setError(e)
+ *  - [polishing] -> show the thinking bulb while busy
+ *  - [success]   -> show the explicit success sparkle
  *
  * Immutable value type — produce new copies with `state.copy(...)`.
  */
@@ -17,4 +19,6 @@ data class CatState(
     val level: Float = 0f,
     val busy: Boolean = false,
     val error: Boolean = false,
+    val polishing: Boolean = false,
+    val success: Boolean = false,
 )

@@ -1,31 +1,33 @@
 {
   "$schema": "https://schemas.florisboard.org/snygg/v2/stylesheet",
   "@defines": {
-    "--primary": "#07C160",
-    "--primary-variant": "#06AD56",
+    "--primary": "#5C8BFF",
+    "--primary-variant": "#4B7AEB",
     "--secondary": "#8A8F94",
     "--secondary-variant": "#6B7280",
-    "--background": "#1C1C1E",
-    "--background-variant": "#2C2C2E",
-    "--surface": "#3A3A3C",
-    "--surface-variant": "#48484A",
+    "--background": "#202226",
+    "--background-variant": "#2A2D32",
+    "--surface": "#34373C",
+    "--surface-variant": "#41454B",
+    "--functional-key": "#4A4E55",
+    "--functional-key-pressed": "#575C64",
     "--popup-surface": "#48484A",
-    "--focused-popup-surface": "#07C160",
+    "--focused-popup-surface": "#5C8BFF",
     "--drag-marker": "rgb(255,0,0)",
-    "--spacer-color": "#FFFFFF0F",
+    "--spacer-color": "transparent",
     "--key-edge-color": "#00000080",
     "--one-hand-background": "#1b5e20",
     "--one-hand-foreground": "#eeeeee",
     "--incognito-icon-color": "#ffffff11",
-    "--accent": "#07C160",
+    "--accent": "#5C8BFF",
     "--on-accent": "#FFFFFF",
-    "--candidate": "#3FD98A",
+    "--candidate": "#78A0FF",
     "--on-primary": "#FFFFFF",
     "--on-background": "#F2F2F7",
     "--on-background-disabled": "#8A8F94",
     "--on-surface": "#F2F2F7",
     "--on-surface-variant": "#8A8F94",
-    "--shape": "rounded-corner(8dp, 8dp, 8dp, 8dp)",
+    "--shape": "rounded-corner(10dp, 10dp, 10dp, 10dp)",
     "--shape-variant": "rounded-corner(14dp, 14dp, 14dp, 14dp)",
     "--shape-chip": "rounded-corner(50%, 50%, 50%, 50%)"
   },
@@ -66,8 +68,8 @@
   "key": {
     "background": "var(--surface)",
     "foreground": "var(--on-surface)",
-    "font-size": "24sp",
-    "font-weight": "500",
+    "font-size": "20sp",
+    "font-weight": "normal",
     "shape": "var(--shape)",
     "shadow-elevation": "1.5dp",
     "shadow-color": "#00000066",
@@ -81,7 +83,7 @@
     "foreground": "var(--on-surface)"
   },
   "key[code=10]": {
-    "font-size": "22sp",
+    "font-size": "20sp",
     "background": "var(--accent)",
     "foreground": "var(--on-accent)"
   },
@@ -96,21 +98,21 @@
     "font-weight": "normal",
     "text-overflow": "ellipsis"
   },
-  "key[code=-7,-11,-202,-203,-227,-233]": {
-    "background": "#2C2C2E",
-    "foreground": "#F2F2F7",
+  "key[code=-7,-11,-202,-203,-233]": {
+    "background": "var(--functional-key)",
+    "foreground": "var(--on-surface)",
     "shadow-elevation": "1.5dp",
     "shadow-color": "#00000066"
   },
-  "key[code=-7,-11,-202,-203,-227,-233]:pressed": {
-    "background": "#3A3A3C",
-    "foreground": "#F2F2F7"
+  "key[code=-7,-11,-202,-203,-233]:pressed": {
+    "background": "var(--functional-key-pressed)",
+    "foreground": "var(--on-surface)"
   },
   "key[code=-201]": {
     "background": "var(--accent)",
     "foreground": "var(--on-accent)",
-    "font-size": "22sp",
-    "font-weight": "500",
+    "font-size": "20sp",
+    "font-weight": "normal",
     "shadow-elevation": "1.5dp",
     "shadow-color": "#00000066"
   },
@@ -119,16 +121,16 @@
     "foreground": "var(--on-accent)"
   },
   "key[code=-261,-262,-263,-264,-265,-266,-267,-268]": {
-    "background": "#2C2C2E",
-    "foreground": "#F2F2F7",
+    "background": "var(--functional-key)",
+    "foreground": "var(--on-surface)",
     "shadow-elevation": "1.5dp",
     "shadow-color": "#00000066",
     "font-size": "14sp",
     "font-weight": "500"
   },
   "key[code=-261,-262,-263,-264,-265,-266,-267,-268]:pressed": {
-    "background": "#3A3A3C",
-    "foreground": "#F2F2F7"
+    "background": "var(--functional-key-pressed)",
+    "foreground": "var(--on-surface)"
   },
   "key[code=-261,-262,-263,-264,-265,-266,-267,-268]:focus": {
     "background": "var(--accent)",
@@ -306,10 +308,11 @@
   "smartbar-candidate-word": {
     "background": "transparent",
     "foreground": "#FEFEFE",
-    "font-size": "18sp",
-    "margin": "2dp 4dp",
-    "padding": "7dp 6dp",
-    "shape": "rounded-corner(8dp, 8dp, 8dp, 8dp)",
+    "font-size": "20sp",
+    "font-weight": "normal",
+    "margin": "3dp 1dp",
+    "padding": "8dp 2dp",
+    "shape": "var(--shape)",
     "text-max-lines": "1",
     "text-overflow": "ellipsis"
   },
@@ -318,8 +321,9 @@
     "font-weight": "normal"
   },
   "smartbar-candidate-word[first=1]": {
+    "background": "var(--surface)",
     "foreground": "var(--candidate)",
-    "font-weight": "500"
+    "font-weight": "normal"
   },
   "smartbar-candidate-word:pressed": {
     "background": "var(--surface-variant)",

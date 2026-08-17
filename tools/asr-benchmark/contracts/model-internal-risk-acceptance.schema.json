@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/model-internal-risk-acceptance-v1.json",
+  "title": "KittyEcho external internal-evaluation risk acceptance payload v1",
+  "description": "Validation contract only. This harness intentionally has no issuer for this reserved receipt kind.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "receipt_contract_id",
+    "scope",
+    "approval_status",
+    "registry_snapshot_sha256",
+    "model_id",
+    "model_revision",
+    "model_revision_kind",
+    "restrictions",
+    "authority_decision_commitment_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f]{12}$"
+    },
+    "receipt_contract_id": {
+      "const": "model-internal-risk-acceptance-v1"
+    },
+    "scope": {"const": "internal_evaluation_download_only"},
+    "approval_status": {"const": "approved"},
+    "registry_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "model_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_]{1,63}$"
+    },
+    "model_revision": {"type": "string", "minLength": 1},
+    "model_revision_kind": {
+      "enum": ["commit", "release_asset"]
+    },
+    "restrictions": {
+      "const": [
+        "repository_external_only",
+        "private_device_only",
+        "no_redistribution",
+        "no_upload"
+      ]
+    },
+    "authority_decision_commitment_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

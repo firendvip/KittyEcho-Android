@@ -41,7 +41,8 @@ import kotlinx.serialization.json.Json
  *
  * Pinyin letters typed on a QWERTY layout accumulate into the composing region;
  * for each composing string we run a fresh native search and surface the Hanzi
- * candidates. Tapping a candidate commits its text via the standard editor flow.
+ * candidates. A candidate which covers only a prefix updates the same composing transaction;
+ * the editor is finalized only after all remaining syllables are selected.
  *
  * The native decoder is shared across all pinyin-family providers via
  * [PinyinNativeBridge]; this provider never touches the decoder directly.
@@ -97,31 +98,49 @@ class PinyinLanguageProvider(val context: Context) : SuggestionProvider {
         allowPossiblyOffensive: Boolean,
         isPrivateSession: Boolean,
     ): List<SuggestionCandidate> {
-        val composing = content.composingText.lowercase().filter { it in PINYIN_CHARS }
-        if (composing.isEmpty()) {
+        val observedState = activePinyinCompositionSession.observe(content.composingText)
+            ?: return emptyList()
+        val composing = observedState.remainingRaw.lowercase().filter { it in PINYIN_CHARS }
+        if (composing.isEmpty() || composing != observedState.remainingRaw) {
             return emptyList()
         }
-        val results = PinyinNativeBridge.search(composing, maxCandidateCount)
-        val suggestions = results.mapIndexed { index, (word, segmentedPy) ->
-            WordSuggestionCandidate(
-                text = word,
-                secondaryText = if (index == 0 && segmentedPy.isNotEmpty()) segmentedPy else null,
-                confidence = (results.size - index).toDouble() / results.size,
-                isEligibleForAutoCommit = false,
-                isEligibleForUserRemoval = false,
-                sourceProvider = this,
+        val result = PinyinNativeBridge.searchDetailed(composing, maxCandidateCount)
+        if (result.candidates.isEmpty()) return emptyList()
+        val state = activePinyinCompositionSession.publishSyllableEndOffsets(
+            expected = observedState,
+            offsets = result.syllableEndOffsets,
+        ) ?: return emptyList()
+        val suggestions = result.candidates.mapIndexed { index, nativeCandidate ->
+            LocalPinyinSegmentedSuggestionCandidate(
+                delegate = WordSuggestionCandidate(
+                    text = nativeCandidate.text,
+                    secondaryText = if (index == 0 && result.decodedPinyin.isNotEmpty()) {
+                        result.decodedPinyin
+                    } else {
+                        null
+                    },
+                    confidence = (result.candidates.size - index).toDouble() / result.candidates.size,
+                    isEligibleForAutoCommit = false,
+                    isEligibleForUserRemoval = false,
+                    sourceProvider = this,
+                ),
+                selection = segmentedSelectionForLocalCandidate(
+                    state = state,
+                    candidateText = nativeCandidate.text,
+                    isFullSentenceCandidate = nativeCandidate.decoderIndex == 0,
+                ),
             )
         }
-        flogDebug { "Pinyin '$composing' -> ${suggestions.size} candidates" }
+        flogDebug { "Pinyin local candidate count=${suggestions.size}" }
         return suggestions
     }
 
     override suspend fun notifySuggestionAccepted(subtype: Subtype, candidate: SuggestionCandidate) {
-        flogDebug { "accepted: ${candidate.text}" }
+        flogDebug { "Pinyin candidate accepted" }
     }
 
     override suspend fun notifySuggestionReverted(subtype: Subtype, candidate: SuggestionCandidate) {
-        flogDebug { "reverted: ${candidate.text}" }
+        flogDebug { "Pinyin candidate reverted" }
     }
 
     override suspend fun removeSuggestion(subtype: Subtype, candidate: SuggestionCandidate): Boolean {
@@ -155,7 +174,12 @@ class PinyinLanguageProvider(val context: Context) : SuggestionProvider {
                 next = it.previous()
             }
             if (start != end) {
-                EditorRange(start, end)
+                val expandedStart = activePinyinCompositionSession.expandedComposingStart(
+                    textBeforeSelection = textBeforeSelection,
+                    trailingRawStart = start,
+                    localLastCommitPosition = localLastCommitPosition,
+                )
+                EditorRange(expandedStart ?: start, end)
             } else {
                 EditorRange.Unspecified
             }
@@ -163,6 +187,7 @@ class PinyinLanguageProvider(val context: Context) : SuggestionProvider {
     }
 
     override suspend fun destroy() {
+        activePinyinCompositionSession.clear()
         PinyinNativeBridge.destroy()
     }
 

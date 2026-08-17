@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/recording-manifest-v1.json",
+  "title": "KittyEcho local recording manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "dataset_id",
+    "pcm_contract_id",
+    "target_device",
+    "dataset_usage",
+    "speaker_cohorts",
+    "frozen_exploration_pcm_set",
+    "clips"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "dataset_id": {"type": "string", "pattern": "^dataset_[0-9a-f]{12}$"},
+    "pcm_contract_id": {"const": "pcm16k-mono-s16le-v1"},
+    "target_device": {"$ref": "#/$defs/target_device"},
+    "dataset_usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recording_purpose", "used_for_model_tuning"],
+      "properties": {
+        "recording_purpose": {
+          "enum": ["development_fixture", "exploration", "production_confirmation"]
+        },
+        "used_for_model_tuning": {"type": "boolean"}
+      }
+    },
+    "speaker_cohorts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/speaker_cohort"}
+    },
+    "frozen_exploration_pcm_set": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/exploration_pcm_set"}
+      ]
+    },
+    "clips": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/clip"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "speaker_cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["round_index", "speaker_cluster_ids", "sentences_per_session"],
+      "properties": {
+        "round_index": {"type": "integer", "minimum": 0},
+        "speaker_cluster_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^speaker_[0-9a-f]{12}$"}
+        },
+        "sentences_per_session": {"type": "integer", "minimum": 1}
+      }
+    },
+    "exploration_pcm_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_id", "manifest_sha256", "public_plan_sha256",
+        "dataset_protocol_sha256", "commitment_sha256"
+      ],
+      "properties": {
+        "dataset_id": {"type": "string", "pattern": "^dataset_[0-9a-f]{12}$"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "public_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "dataset_protocol_sha256": {"$ref": "#/$defs/sha256"},
+        "commitment_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "target_device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "physical_device", "abi", "device_profile_sha256"],
+      "properties": {
+        "platform": {"const": "android"},
+        "physical_device": {"type": "boolean"},
+        "abi": {"const": "arm64-v8a"},
+        "device_profile_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "clip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clip_id",
+        "audio_path",
+        "audio_sha256",
+        "pcm_payload_sha256",
+        "pcm_payload_bytes",
+        "speaker_cluster_id",
+        "session_cluster_id",
+        "sentence_id",
+        "prompt_kind",
+        "session_index",
+        "hours_since_previous_session",
+        "speech_duration_ms",
+        "speech_onset_ms",
+        "accent_natural",
+        "capture_attempt",
+        "source",
+        "consent",
+        "privacy",
+        "conditions"
+      ],
+      "properties": {
+        "clip_id": {"type": "string", "pattern": "^clip_[0-9a-f]{12}$"},
+        "audio_path": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Absolute local path; real recordings must resolve outside the repository."
+        },
+        "audio_sha256": {"$ref": "#/$defs/sha256"},
+        "pcm_payload_sha256": {"$ref": "#/$defs/sha256"},
+        "pcm_payload_bytes": {"type": "integer", "minimum": 0},
+        "speaker_cluster_id": {"type": "string", "pattern": "^speaker_[0-9a-f]{12}$"},
+        "session_cluster_id": {"type": "string", "pattern": "^session_[0-9a-f]{12}$"},
+        "sentence_id": {"type": "string", "pattern": "^sentence_[0-9a-f]{12}$"},
+        "prompt_kind": {"enum": ["common_anchor", "coverage"]},
+        "session_index": {"type": "integer", "minimum": 1},
+        "hours_since_previous_session": {"type": ["number", "null"], "minimum": 0},
+        "speech_duration_ms": {"type": "number", "exclusiveMinimum": 0},
+        "speech_onset_ms": {"type": "number", "minimum": 0},
+        "accent_natural": {"type": "boolean"},
+        "capture_attempt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "attempt_index",
+            "technical_rerecord",
+            "replaces_clip_id",
+            "exclusion_reason_code",
+            "take_selection_policy"
+          ],
+          "properties": {
+            "attempt_index": {"type": "integer", "minimum": 1},
+            "technical_rerecord": {"type": "boolean"},
+            "replaces_clip_id": {
+              "type": ["string", "null"],
+              "pattern": "^clip_[0-9a-f]{12}$"
+            },
+            "exclusion_reason_code": {
+              "type": ["string", "null"],
+              "enum": [null, "capture_device_failure", "truncated_audio", "corrupt_wav"]
+            },
+            "take_selection_policy": {"const": "first_valid_take"}
+          }
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "local_only", "cloud_origin"],
+          "properties": {
+            "kind": {
+              "enum": [
+                "local_target_device_recording",
+                "local_consented_recording",
+                "synthetic_fixture"
+              ]
+            },
+            "local_only": {"const": true},
+            "cloud_origin": {"const": false}
+          }
+        },
+        "consent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["obtained", "scope"],
+          "properties": {
+            "obtained": {"const": true},
+            "scope": {"const": "local_asr_benchmark"}
+          }
+        },
+        "privacy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contains_sensitive_content", "upload_permitted"],
+          "properties": {
+            "contains_sensitive_content": {"const": false},
+            "upload_permitted": {"const": false}
+          }
+        },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "quiet_near", "noise", "fast", "slow", "immediate_start", "short",
+              "normal_short", "long", "proper_name_number", "code_switch", "accent"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

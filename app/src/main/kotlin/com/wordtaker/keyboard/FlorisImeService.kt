@@ -61,6 +61,7 @@ import com.wordtaker.keyboard.lib.devtools.flogInfo
 import com.wordtaker.keyboard.lib.devtools.flogWarning
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.voice.VoiceViewModel
+import com.wordtaker.keyboard.wordtaker.voice.VoiceStartHaptic
 import androidx.lifecycle.ViewModelProvider
 import com.wordtaker.keyboard.lib.util.InputMethodUtils
 import com.wordtaker.keyboard.lib.util.debugSummarize
@@ -449,6 +450,18 @@ class FlorisImeService : LifecycleInputMethodService() {
                     historyRepository = AppGraph.historyRepository,
                     settingsRepository = AppGraph.settingsRepository,
                     toneController = AppGraph.toneController,
+                    startHaptic = VoiceStartHaptic {
+                        inputFeedbackController.voiceRecordingStart()
+                    },
+                    privacySource = com.wordtaker.keyboard.wordtaker.voice.VoicePrivacySource {
+                        val info = editorInstance.activeInfo
+                        com.wordtaker.keyboard.wordtaker.voice.VoicePrivacyContext.fromEditor(
+                            inputType = info.inputAttributes.raw,
+                            noPersonalizedLearning = info.imeOptions.flagNoPersonalizedLearning,
+                            incognito = keyboardManager.activeState.isIncognitoMode,
+                            editorSessionToken = editorInstance.activeInputSessionToken,
+                        )
+                    },
                 ),
             )[VoiceViewModel::class.java].stopRecordingAndEndTone()
         }.onFailure {

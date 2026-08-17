@@ -28,7 +28,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.wordtaker.keyboard.FlorisImeService
 import com.wordtaker.keyboard.editorInstance
+import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.ime.keyboard.FlorisImeSizing
 import com.wordtaker.keyboard.wordtaker.cat.CatSkin
 import com.wordtaker.keyboard.wordtaker.cat.CatState
@@ -54,6 +56,7 @@ import com.wordtaker.keyboard.wordtaker.ui.WordTakerSettingsActivity
 fun CatVoiceOverlay(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val editorInstance by context.editorInstance()
+    val keyboardManager by context.keyboardManager()
 
     val vm: VoiceViewModel = viewModel(
         factory = VoiceViewModel.Factory(
@@ -62,6 +65,18 @@ fun CatVoiceOverlay(modifier: Modifier = Modifier) {
             historyRepository = AppGraph.historyRepository,
             settingsRepository = AppGraph.settingsRepository,
             toneController = AppGraph.toneController,
+            startHaptic = VoiceStartHaptic {
+                FlorisImeService.inputFeedbackController()?.voiceRecordingStart()
+            },
+            privacySource = VoicePrivacySource {
+                val info = editorInstance.activeInfo
+                VoicePrivacyContext.fromEditor(
+                    inputType = info.inputAttributes.raw,
+                    noPersonalizedLearning = info.imeOptions.flagNoPersonalizedLearning,
+                    incognito = keyboardManager.activeState.isIncognitoMode,
+                    editorSessionToken = editorInstance.activeInputSessionToken,
+                )
+            },
         ),
     )
 
@@ -83,13 +98,6 @@ fun CatVoiceOverlay(modifier: Modifier = Modifier) {
             hasStarted.value = true
         } else if (hasStarted.value && !state.recording && !state.busy) {
             VoiceOverlayController.hide()
-        }
-    }
-
-    // Commit polished text into the focused input field.
-    LaunchedEffect(vm) {
-        vm.committed.collect { text ->
-            editorInstance.commitText(text)
         }
     }
 

@@ -25,9 +25,21 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.florisboard.libnative.nativeGetCandidate
 import org.florisboard.libnative.nativeGetPyStr
+import org.florisboard.libnative.nativeGetSplStartPositions
 import org.florisboard.libnative.nativeOpenDecoderFd
 import org.florisboard.libnative.nativeResetSearch
 import org.florisboard.libnative.nativeSearch
+
+internal data class PinyinNativeCandidate(
+    val text: String,
+    val decoderIndex: Int,
+)
+
+internal data class PinyinNativeSearchResult(
+    val candidates: List<PinyinNativeCandidate>,
+    val decodedPinyin: String,
+    val syllableEndOffsets: List<Int>,
+)
 
 /**
  * Shared, process-wide gateway to the bundled AOSP Google PinyinIME native decoder
@@ -92,33 +104,63 @@ object PinyinNativeBridge {
      * it can never interleave with another provider's search.
      */
     suspend fun search(pinyin: String, maxCount: Int): List<Pair<String, String>> {
-        if (pinyin.isEmpty() || maxCount <= 0) return emptyList()
+        val result = searchDetailed(pinyin, maxCount)
+        return result.candidates.mapIndexed { index, candidate ->
+            candidate.text to if (index == 0) result.decodedPinyin else ""
+        }
+    }
+
+    /**
+     * Runs one fresh search and returns candidate decoder indices together with exact raw
+     * spelling boundaries. The latter lets segmented selection consume syllables without
+     * guessing from candidate width or from its visible position after cloud merging.
+     */
+    internal suspend fun searchDetailed(pinyin: String, maxCount: Int): PinyinNativeSearchResult {
+        if (pinyin.isEmpty() || maxCount <= 0) {
+            return PinyinNativeSearchResult(emptyList(), "", emptyList())
+        }
         return nativeLock.withLock {
             if (!isDecoderReady) {
-                return@withLock emptyList()
+                return@withLock PinyinNativeSearchResult(emptyList(), "", emptyList())
             }
             try {
                 val pyBytes = pinyin.toByteArray(Charsets.US_ASCII)
                 val count = nativeSearch(pyBytes, pyBytes.size)
                 if (count <= 0) {
                     nativeResetSearch()
-                    return@withLock emptyList()
+                    return@withLock PinyinNativeSearchResult(emptyList(), "", emptyList())
                 }
-                val segmentedPy = runCatching { nativeGetPyStr() }.getOrDefault(pinyin)
+                val decodedPinyin = runCatching { nativeGetPyStr() }.getOrDefault(pinyin)
+                val rawBoundaries = runCatching {
+                    nativeGetSplStartPositions().toList()
+                }.getOrDefault(emptyList())
+                val syllableEndOffsets = rawBoundaries
+                    .takeIf {
+                        it.size >= 2 &&
+                            it.first() == 0 &&
+                            it.zipWithNext().all { (left, right) -> left < right } &&
+                            it.last() <= pinyin.length
+                    }
+                    ?.drop(1)
+                    .orEmpty()
                 val limit = minOf(count, maxCount)
-                val results = buildList {
+                val candidates = buildList {
                     for (i in 0 until limit) {
                         val word = nativeGetCandidate(i)
                         if (word.isEmpty()) continue
-                        add(word to if (isEmpty()) segmentedPy else "")
+                        add(PinyinNativeCandidate(text = word, decoderIndex = i))
                     }
                 }
                 nativeResetSearch()
-                results
+                PinyinNativeSearchResult(
+                    candidates = candidates,
+                    decodedPinyin = decodedPinyin,
+                    syllableEndOffsets = syllableEndOffsets,
+                )
             } catch (e: Exception) {
                 flogError { "Pinyin bridge search error: $e" }
                 runCatching { nativeResetSearch() }
-                emptyList()
+                PinyinNativeSearchResult(emptyList(), "", emptyList())
             }
         }
     }

@@ -17,7 +17,6 @@
 package com.wordtaker.keyboard.ime.text
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +26,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import com.wordtaker.keyboard.R
@@ -34,12 +34,12 @@ import com.wordtaker.keyboard.app.FlorisPreferenceStore
 import com.wordtaker.keyboard.ime.smartbar.IncognitoDisplayMode
 import com.wordtaker.keyboard.ime.smartbar.InlineSuggestionsStyleCache
 import com.wordtaker.keyboard.ime.smartbar.quickaction.QuickActionsOverflowPanel
-import com.wordtaker.keyboard.wordtaker.voice.DARK_PANEL_BG
-import com.wordtaker.keyboard.wordtaker.voice.WT_PANEL_GRAY
 import com.wordtaker.keyboard.wordtaker.handwriting.HandwritingInputLayout
+import com.wordtaker.keyboard.wordtaker.ui.DoubaoImeSkin
 import com.wordtaker.keyboard.ime.nlp.handwriting.HandwritingLanguageProvider
 import com.wordtaker.keyboard.ime.text.keyboard.TextKeyboardLayout
 import com.wordtaker.keyboard.ime.theme.FlorisImeUi
+import com.wordtaker.keyboard.ime.theme.LocalFlorisImeThemeIsNight
 import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.subtypeManager
 import dev.patrickgold.jetpref.datastore.model.collectAsState
@@ -58,6 +58,7 @@ fun TextInputLayout(
     val state by keyboardManager.activeState.collectAsState()
     val evaluator by keyboardManager.activeEvaluator.collectAsState()
     val activeSubtype by subtypeManager.activeSubtypeFlow.collectAsState()
+    val palette = DoubaoImeSkin.palette(LocalFlorisImeThemeIsNight.current)
 
     // The handwriting subtype replaces the key grid entirely with the ink pad. Detect it via its
     // dedicated suggestion-provider id (set on HANDWRITING_DEFAULT) so the check survives any
@@ -70,14 +71,11 @@ fun TextInputLayout(
         modifier = modifier
             .fillMaxWidth()
             .wrapContentHeight()
-            // #7 键盘面板背景与猫语音界面统一为同一档浅灰（键盘那种灰，比微信稿略浅）。
-            // 键按本身仍由 Snygg 主题绘制，这层灰只填充键之间/面板底色。深色模式用协调深灰。
-            .background(
-                if (isSystemInDarkTheme()) DARK_PANEL_BG else WT_PANEL_GRAY,
-            ),
+            // The measured Doubao panel color fills the key gaps and the space below the grid.
+            // Key caps remain stylesheet-driven so press/focus selectors keep working.
+            .background(Color(palette.panelArgb)),
     ) {
-        // WordTaker: the full FlorisBoard Smartbar (action toggles + overflow) is
-        // replaced by the minimal WeChat-style ImeToolbar above the keyboard.
+        // WordTaker replaces the full FlorisBoard Smartbar with the compact reference toolbar.
         // The pinyin candidate strip no longer renders here — candidates now fill
         // the TOP toolbar row (see CatKeyboardLayout). Keeping it suppressed avoids
         // double candidates AND keeps the keyboard body height stable (this bar was

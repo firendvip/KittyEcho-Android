@@ -38,5 +38,13 @@ external fun nativeChoose(candId: Int): Int
 /** Number of pinyin spellings already fixed/consumed by chosen candidates. */
 external fun nativeGetFixedLen(): Int
 
+/**
+ * Returns the raw pinyin offsets for each decoded spelling boundary.
+ *
+ * A result for two decoded syllables contains three values: the first is `0`, followed by
+ * the raw end offset of syllable one and the raw end offset of syllable two.
+ */
+external fun nativeGetSplStartPositions(): IntArray
+
 /** Returns the decoded/segmented pinyin string for display above candidates. */
 external fun nativeGetPyStr(): String

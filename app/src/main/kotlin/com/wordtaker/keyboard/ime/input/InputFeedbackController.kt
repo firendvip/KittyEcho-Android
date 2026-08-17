@@ -37,6 +37,15 @@ import kotlinx.coroutines.launch
 
 val LocalInputFeedbackController = staticCompositionLocalOf<InputFeedbackController> { error("not init") }
 
+internal fun dispatchVoiceStartHaptic(
+    enabled: Boolean,
+    hardwareAvailable: Boolean,
+    perform: () -> Unit,
+) {
+    if (!enabled || !hardwareAvailable) return
+    runCatching(perform)
+}
+
 /**
  * Input feedback controller is responsible to process and perform audio and haptic
  * feedback for user interactions based on the system and floris preferences.
@@ -84,6 +93,15 @@ class InputFeedbackController private constructor(private val ims: InputMethodSe
     fun gestureMovingSwipe(data: KeyData = TextKeyData.UNSPECIFIED) {
         if (prefs.inputFeedback.audioFeatGestureMovingSwipe.get()) performAudioFeedback(data, 0.4)
         if (prefs.inputFeedback.hapticFeatGestureMovingSwipe.get()) performHapticFeedback(data, 0.05)
+    }
+
+    /** One standard short keyboard haptic for an accepted voice-recording start; never audio. */
+    fun voiceRecordingStart() {
+        dispatchVoiceStartHaptic(
+            enabled = prefs.inputFeedback.hapticEnabled.get(),
+            hardwareAvailable = vibrator != null,
+            perform = { performHapticFeedback(TextKeyData.UNSPECIFIED, 1.0) },
+        )
     }
 
     private fun systemPref(id: String): Boolean {

@@ -14,19 +14,29 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.PI
 import kotlin.math.sin
 
+interface VoiceToneFeedback {
+    fun endBeep(
+        enabled: Boolean = true,
+        style: String = SettingsState.DEFAULT_TONE_STYLE,
+        volume: Float = 1f,
+    )
+
+    fun release()
+}
+
 /**
- * Plays short UI tones for recording start / end.
+ * Plays the short UI tone after recording capture has closed.
  *
  * 需求#8：只保留"喵"声。无论传入什么 [style]，都播放 ported macOS "喵"
- * (res/raw/meow.mp3) via [SoundPool] — low latency, re-triggerable. End tone is
- * slightly quieter, mirroring the desktop client (start 1.0×, end 0.85×). 合成蜂鸣
- * ([AudioTrack] 正弦音) 已不再使用，仅作为 meow 加载失败时的兜底。
+ * (res/raw/meow.mp3) via [SoundPool] — low latency, re-triggerable. The 0.85×
+ * attenuation mirrors the desktop client. 合成蜂鸣 ([AudioTrack] 正弦音) 已不再使用，
+ * 仅作为 meow 加载失败时的兜底。
  *
- * "无声"修复：构造/首用时即 EAGERLY 预加载 meow 采样，避免首个音因懒加载被丢弃。
+ * 构造/首用时即 EAGERLY 预加载 meow 采样，避免本段结束音因懒加载被丢弃。
  *
  * All audio failures are caught and logged — playing a tone must never crash the app.
  */
-class ToneController(private val appContext: Context? = null) {
+class ToneController(private val appContext: Context? = null) : VoiceToneFeedback {
 
     // Held behind an AtomicReference so release() can null it out and any concurrent
     // caller sees null instead of touching a freed native pool.
@@ -38,7 +48,7 @@ class ToneController(private val appContext: Context? = null) {
     @Volatile private var meowLoaded: Boolean = false
 
     init {
-        // 需求#8：立即预热 SoundPool 并异步加载 meow，使第一次 startBeep 不被丢音。
+        // 立即预热 SoundPool 并异步加载 meow，使第一次结束音不被丢弃。
         // 放在属性声明之后，确保 init 运行时 soundPoolRef 等字段已初始化。
         runCatching { pool()?.let { ensureMeowLoaded(it) } }
     }
@@ -78,32 +88,14 @@ class ToneController(private val appContext: Context? = null) {
     }
 
     /**
-     * Start tone. Gated by [enabled]. 需求#8：无论 [style] 为何，一律播放"喵"；
-     * [style] 仅为兼容调用点而保留，不再区分。合成蜂鸣仅在 meow 播放失败时兜底。
-     *
-     * @param volume 语音提示音全局音量系数 0..1（用户滑杆），只作用于喵叫/开始/结束音。
-     */
-    fun startBeep(
-        enabled: Boolean = true,
-        @Suppress("UNUSED_PARAMETER") style: String = SettingsState.DEFAULT_TONE_STYLE,
-        volume: Float = 1f,
-    ) {
-        if (!enabled) return
-        val v = volume.coerceIn(0f, 1f)
-        if (v <= 0f) return
-        if (playMeow(MEOW_START_VOLUME * v)) return
-        play(buildTone(startFreq = 880f, endFreq = 880f, durationMs = 80), v)
-    }
-
-    /**
      * End tone. Gated by [enabled]. 需求#8：一律播放"喵"(略轻)；[style] 保留但忽略。
      *
-     * @param volume 语音提示音全局音量系数 0..1（用户滑杆），只作用于喵叫/开始/结束音。
+     * @param volume 语音提示音全局音量系数 0..1（用户滑杆），只作用于结束喵叫。
      */
-    fun endBeep(
-        enabled: Boolean = true,
-        @Suppress("UNUSED_PARAMETER") style: String = SettingsState.DEFAULT_TONE_STYLE,
-        volume: Float = 1f,
+    override fun endBeep(
+        enabled: Boolean,
+        @Suppress("UNUSED_PARAMETER") style: String,
+        volume: Float,
     ) {
         if (!enabled) return
         val v = volume.coerceIn(0f, 1f)
@@ -118,14 +110,14 @@ class ToneController(private val appContext: Context? = null) {
         ensureMeowLoaded(pool)
         if (meowSoundId == 0) return false
         return runCatching {
-            // SoundPool ignores plays before load completes; the first record press may
-            // miss, but subsequent ones (and the matching end tone) play reliably.
+            // SoundPool ignores plays before load completes; a very early first stop may
+            // miss its end tone, while subsequent end-tone plays are reliable.
             pool.play(meowSoundId, volume, volume, 1, 0, 1f)
             true
         }.onFailure { Log.w(TAG, "meow play failed", it) }.getOrDefault(false)
     }
 
-    fun release() {
+    override fun release() {
         // Null the reference first so any concurrent playMeow() sees null and bails,
         // then release the now-unreferenced native pool.
         val pool = soundPoolRef.getAndSet(null)
@@ -195,7 +187,6 @@ class ToneController(private val appContext: Context? = null) {
         const val AMPLITUDE = 0.5f
         const val FADE_RATIO = 0.15f
         const val MIN_BUFFER_BYTES = 256
-        const val MEOW_START_VOLUME = 1.0f
         const val MEOW_END_VOLUME = 0.85f
     }
 }

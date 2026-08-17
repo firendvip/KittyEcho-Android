@@ -9,6 +9,7 @@ import androidx.annotation.RequiresPermission
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
+import kotlin.math.sqrt
 
 /**
  * Continuous 16kHz mono 16-bit PCM capture for the streaming ASR engine.
@@ -19,7 +20,8 @@ import kotlin.concurrent.thread
  * (short / 32768f) in [-1, 1]. cancel() discards the buffer. Total capture is capped
  * at 120s to bound memory; on overflow recording auto-stops.
  *
- * Exception-safe: every public method swallows failures and returns a safe default.
+ * Start/cancel are exception-safe; stop surfaces an uncertain AudioRecord release as the typed
+ * [RecorderStopException] so no decoder can consume a segment while capture may remain open.
  */
 class PcmRecorder {
 
@@ -29,8 +31,11 @@ class PcmRecorder {
     // getAndSet(null) is atomic, preventing a double release() race between stop()
     // (Dispatchers.IO) and cancel() (main thread, e.g. onStartInput mid-transcribe).
     private val record = AtomicReference<AudioRecord?>(null)
+    private val captureFailure = AtomicReference<RecorderReadException?>(null)
     @Volatile
     private var latch: CountDownLatch? = null
+    @Volatile
+    private var visualLevel = 0f
 
     // Captured PCM chunks, guarded by `chunks` itself.
     private val chunks = ArrayList<ShortArray>()
@@ -39,14 +44,10 @@ class PcmRecorder {
      * @param onChunk optional streaming sink: invoked on the capture thread with each
      *        fresh chunk converted to floats in [-1, 1] (for live ASR decoding). The
      *        callback must be fast and never throw (exceptions are swallowed here).
-     * @param skipLeadingSamples drop this many samples from the head of the capture
-     *        (both the accumulated buffer and [onChunk]). Used to keep the start tone
-     *        — played right after the mic opens — out of recognition entirely.
      */
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     fun start(
         onChunk: ((FloatArray) -> Unit)? = null,
-        skipLeadingSamples: Int = 0,
     ): Boolean {
         if (recording) return false
         return try {
@@ -57,10 +58,9 @@ class PcmRecorder {
             val bufferSize = maxOf(minBuf, SAMPLE_RATE * 2)
             // 音源选择（vivo iQOO 8/OriginOS 真机逐一标定，勿随意改动）：
             // - VOICE_COMMUNICATION（当前）：通话采集通路无「类语音 VAD 慢开门」，
-            //   提示音关闭、无任何声学预热时立即开口 5/5 句首完整（R3-011 修复）。
-            // - MIC：前端 AGC/降噪是「检测到类语音才开门」，无提示音（喵叫）预热时
-            //   吞掉每句开头 ~0.6-2.2s（静态噪声/超声怎么播都不预热，喵叫 0.1 音量即可
-            //   预热——即门控看信号形态不看能量）。
+            //   无需应用侧播放任何开始音或预热音即可保留立即开口的句首（R3-011 修复）。
+            // - MIC：历史标定中前端 AGC/降噪会慢开门，立即开口会吞掉约 0.6-2.2s；
+            //   不再用应用侧音频规避，因为开始播放音会污染正在采集的识别输入。
             // - VOICE_RECOGNITION：前端降噪慢收敛，句首前切 ~2s（R3 轮标定）。
             // - UNPROCESSED / VOICE_PERFORMANCE：vivo 上返回全零帧（采集无声）。
             // - CAMCORDER：与 MIC 同样吞句首。
@@ -76,11 +76,17 @@ class PcmRecorder {
                 return false
             }
             synchronized(chunks) { chunks.clear() }
+            captureFailure.set(null)
+            visualLevel = 0f
             record.set(rec)
             val doneLatch = CountDownLatch(1)
             latch = doneLatch
             val startedAt = android.os.SystemClock.elapsedRealtime()
             rec.startRecording()
+            if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                safeReleaseRecord()
+                return false
+            }
             recording = true
             thread(name = "PcmRecorder", isDaemon = true) {
                 val buf = ShortArray(CHUNK_SAMPLES)
@@ -118,10 +124,6 @@ class PcmRecorder {
                                         " (n=$n)"
                                 )
                             }
-                            // 护栏：丢掉开头 skipLeadingSamples 个采样（起始提示音窗口），
-                            // 不进缓冲、不进流式回调——喵叫绝不进识别器。样本级精度。
-                            val dropped = total // samples dropped/consumed before this read
-                            val skipInBuf = (skipLeadingSamples - dropped).coerceIn(0, n)
                             // AGC-lite（见上）：在爬坡补偿之后按块调平。
                             var sum = 0.0
                             for (i in 0 until n) { val v = buf[i].toDouble(); sum += v * v }
@@ -136,11 +138,8 @@ class PcmRecorder {
                                 }
                             }
                             total += n
-                            if (skipInBuf >= n) {
-                                if (total >= MAX_SAMPLES) { recording = false; break }
-                                continue
-                            }
-                            val copy = buf.copyOfRange(skipInBuf, n)
+                            val copy = buf.copyOfRange(0, n)
+                            visualLevel = normalizedVisualLevel(copy)
                             synchronized(chunks) { chunks.add(copy) }
                             if (onChunk != null) {
                                 try {
@@ -156,14 +155,16 @@ class PcmRecorder {
                                 break
                             }
                         } else if (n < 0) {
-                            // read error; stop capturing.
+                            captureFailure.compareAndSet(null, RecorderReadException(n))
                             recording = false
                             break
                         }
                     }
                 } catch (t: Throwable) {
                     Log.e(TAG, "capture loop failed", t)
+                    captureFailure.compareAndSet(null, RecorderReadException(cause = t))
                 } finally {
+                    visualLevel = 0f
                     doneLatch.countDown()
                 }
             }
@@ -172,18 +173,31 @@ class PcmRecorder {
             Log.e(TAG, "start failed", t)
             safeReleaseRecord()
             recording = false
-            false
+            throw RecorderStartException(t)
         }
     }
 
     /** Stops capture, releases the recorder, returns the captured samples as floats. */
     fun stop(): FloatArray {
         recording = false
+        // Release first: AudioRecord.stop() unblocks an in-flight read immediately. Waiting for
+        // the reader after ownership has been released only freezes the final complete buffer;
+        // it must never keep the microphone unavailable while whole-utterance ASR runs.
+        val releaseFailure = safeReleaseRecord()
         try {
             latch?.await(AWAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (_: Throwable) {
         }
-        safeReleaseRecord()
+        if (releaseFailure != null) {
+            synchronized(chunks) { chunks.clear() }
+            captureFailure.set(null)
+            throw RecorderStopException(releaseFailure)
+        }
+        val readFailure = captureFailure.getAndSet(null)
+        if (readFailure != null) {
+            synchronized(chunks) { chunks.clear() }
+            throw readFailure
+        }
         return flattenToFloats()
     }
 
@@ -199,10 +213,13 @@ class PcmRecorder {
     fun cancel() {
         recording = false
         synchronized(chunks) { chunks.clear() }
+        captureFailure.set(null)
         safeReleaseRecord()
     }
 
     fun isRecording(): Boolean = recording
+
+    fun currentLevel(): Float = visualLevel
 
     private fun flattenToFloats(): FloatArray {
         val snapshot = synchronized(chunks) {
@@ -229,22 +246,37 @@ class PcmRecorder {
     private fun clampPcm(sample: Float): Short =
         sample.toInt().coerceIn(PCM_PEAK_MIN, PCM_PEAK_MAX).toShort()
 
-    private fun safeReleaseRecord() {
+    private fun normalizedVisualLevel(samples: ShortArray): Float {
+        if (samples.isEmpty()) return 0f
+        var sum = 0.0
+        for (sample in samples) {
+            val value = sample.toDouble()
+            sum += value * value
+        }
+        val rms = sqrt(sum / samples.size).toFloat()
+        return (rms / VISUAL_LEVEL_FULL_SCALE_RMS).coerceIn(0f, 1f)
+    }
+
+    private fun safeReleaseRecord(): Throwable? {
         // Atomic claim: whichever thread wins getAndSet(null) owns the release;
         // every other caller sees null and does nothing. No double release().
         val rec = record.getAndSet(null)
+        var failure: Throwable? = null
         if (rec != null) {
             try {
                 if (rec.recordingState == AudioRecord.RECORDSTATE_RECORDING) rec.stop()
             } catch (t: Throwable) {
                 Log.e(TAG, "stop failed", t)
+                failure = t
             }
             try {
                 rec.release()
             } catch (t: Throwable) {
                 Log.e(TAG, "release failed", t)
+                if (failure == null) failure = t
             }
         }
+        return failure
     }
 
     private companion object {
@@ -268,6 +300,9 @@ class PcmRecorder {
         private const val AGC_TARGET_RMS = 500f
         private const val AGC_MAX_GAIN = 8f
         private const val AGC_ADAPT = 0.6f
+        // Visual-only reference: normal speech is roughly 800–1700 RMS after the existing
+        // capture gain chain, while louder speech approaches this value.
+        private const val VISUAL_LEVEL_FULL_SCALE_RMS = 2500f
         // 统一增益预算（集中记此一处）：句首 450ms 爬坡补偿（≤RAMP_START_GAIN=4x）→
         // AGC-lite 按「已补偿后」的块 RMS 自调（≤AGC_MAX_GAIN=8x，正常音量恒 1x，故 AGC
         // 不会与爬坡叠加放大到失控）→ 两段都经唯一的 clampPcm() 硬限幅。峰值量程如下。

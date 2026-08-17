@@ -16,9 +16,10 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * accessToken 用 Android Keystore（AES/GCM，密钥不出安全硬件）加密后落
  * SharedPreferences；账号摘要（昵称/邀请码等非机密）明文 JSON 存储。
- * Keystore 不可用（极老设备/异常）时该次写入放弃加密并降级明文键，读取两者兼容。
+ * Keystore 不可用时拒绝持久化 token。历史明文兼容值仅允许原地迁移为密文；
+ * 无法迁移时立即删除，避免凭据继续以明文留存。
  */
-class TokenStore(context: Context) {
+class TokenStore(context: Context) : AuthSessionStore {
 
     private val prefs = context.applicationContext
         .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -39,20 +40,16 @@ class TokenStore(context: Context) {
         }
     }
 
-    fun isLoggedIn(): Boolean = !accessToken().isNullOrBlank()
+    override fun isLoggedIn(): Boolean = !accessToken().isNullOrBlank()
 
     /** 写入登录态：token 加密落盘，account 摘要明文 JSON。 */
-    fun set(accessToken: String, account: AccountInfo?) {
+    override fun set(accessToken: String, account: AccountInfo?) {
         require(accessToken.isNotBlank()) { "TokenStore.set 需要 accessToken" }
         synchronized(this) {
-            val editor = prefs.edit()
             val encrypted = encrypt(accessToken)
-            if (encrypted != null) {
-                editor.putString(KEY_TOKEN_ENC, encrypted).remove(KEY_TOKEN_PLAIN)
-            } else {
-                // Keystore 不可用的兜底：明文降级（好过丢登录态），读取时两者兼容。
-                editor.putString(KEY_TOKEN_PLAIN, accessToken).remove(KEY_TOKEN_ENC)
-            }
+                ?: throw IllegalStateException("系统安全存储暂不可用")
+            val editor = prefs.edit()
+            editor.putString(KEY_TOKEN_ENC, encrypted).remove(KEY_TOKEN_PLAIN)
             editor.putString(KEY_ACCOUNT, account?.toJson()?.toString())
             editor.apply()
             cachedToken = accessToken
@@ -61,17 +58,17 @@ class TokenStore(context: Context) {
     }
 
     /** 读取账号摘要（无则 null）。 */
-    fun account(): AccountInfo? = runCatching {
+    override fun account(): AccountInfo? = runCatching {
         prefs.getString(KEY_ACCOUNT, null)?.let { AccountInfoJson.from(JSONObject(it)) }
     }.getOrNull()
 
     /** 更新账号摘要（token 不变）。 */
-    fun updateAccount(account: AccountInfo?) {
+    override fun updateAccount(account: AccountInfo?) {
         prefs.edit().putString(KEY_ACCOUNT, account?.toJson()?.toString()).apply()
     }
 
     /** 退出登录 / token 失效时清空。 */
-    fun clear() {
+    override fun clear() {
         synchronized(this) {
             prefs.edit()
                 .remove(KEY_TOKEN_ENC)
@@ -89,7 +86,18 @@ class TokenStore(context: Context) {
         prefs.getString(KEY_TOKEN_ENC, null)?.let { enc ->
             decrypt(enc)?.let { return it }
         }
-        return prefs.getString(KEY_TOKEN_PLAIN, null)
+        val legacy = prefs.getString(KEY_TOKEN_PLAIN, null)?.takeIf { it.isNotBlank() }
+            ?: return null
+        val migrated = encrypt(legacy)
+        if (migrated == null) {
+            prefs.edit().remove(KEY_TOKEN_PLAIN).apply()
+            return null
+        }
+        prefs.edit()
+            .putString(KEY_TOKEN_ENC, migrated)
+            .remove(KEY_TOKEN_PLAIN)
+            .apply()
+        return legacy
     }
 
     private fun encrypt(plain: String): String? = runCatching {

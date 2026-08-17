@@ -93,10 +93,8 @@ class FlorisApplication : Application() {
         super.onCreate()
         FlorisApplicationReference = WeakReference(this)
         com.wordtaker.keyboard.wordtaker.di.AppGraph.init(applicationContext)
-        // Prime the on-device ASR engine EARLY on a background thread. Constructing the
-        // speechEngine singleton triggers its init (~72MB streaming model install + ONNX warm-up),
-        // so first voice use isn't blocked on a cold, slow load (BUG #12). Fully guarded:
-        // any failure here must never crash app startup.
+        // Prime the on-device ASR engine EARLY on a background thread. The APK contains no
+        // model; this only validates/warms a previously installed private Paraformer model.
         scope.launch {
             try {
                 com.wordtaker.keyboard.wordtaker.di.AppGraph.speechEngine

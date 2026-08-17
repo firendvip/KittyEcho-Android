@@ -44,10 +44,8 @@ import com.wordtaker.keyboard.ime.ImeUiMode
 import com.wordtaker.keyboard.ime.keyboard.FlorisImeSizing
 import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.wordtaker.account.AccountResult
-import com.wordtaker.keyboard.wordtaker.toolbar.TOOLBAR_HEIGHT_DP
-import com.wordtaker.keyboard.wordtaker.voice.catStripHeight
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
-import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_HANDWRITING
+import com.wordtaker.keyboard.wordtaker.speech.ParaformerModelSettingsSection
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_QWERTY
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_T9
 import com.wordtaker.keyboard.wordtaker.ui.ROLE_GAOEQ
@@ -77,6 +75,7 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
     // Reactive current keyboard style. Writing it makes SubtypeManager re-seed the active
     // subtype, so the keyboard layout (全拼/九宫格) changes in place — no Activity, no navigation.
     val keyboardStyle by prefs.internal.selectedKeyboardStyle.observeAsState()
+    val keyboardHapticEnabled by prefs.inputFeedback.hapticEnabled.observeAsState()
 
     fun backToKeyboard() {
         keyboardManager.activeState.imeUiMode = ImeUiMode.TEXT
@@ -98,11 +97,9 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
     val titleColor = if (dark) Color(0xFFE3E3E6) else Color(0xFF1B1B1F)
     val rowTextColor = if (dark) Color(0xFFE3E3E6) else Color(0xFF1B1B1F)
 
-    // item3: 面板高度与键盘态严格等高 —— 键盘态总高 = 顶条(0.152x屏宽) + keyboardUiHeight，
-    // 设置态总高 = 工具栏(44) + 本面板。令 面板高 = keyboardUiHeight + (顶条 - 44)，
-    // 两种状态 IME 窗口高度完全一致，切换零跳动。(batch3-A: 顶条已按屏宽比例化)
-    val panelHeight = FlorisImeSizing.keyboardUiHeight() +
-        (catStripHeight() - TOOLBAR_HEIGHT_DP.dp)
+    // ImeWindow centers the unchanged 44dp toolbar inside the same dynamic strip as TEXT.
+    // This panel therefore matches only the keyboard body height, keeping total IME height fixed.
+    val panelHeight = FlorisImeSizing.keyboardUiHeight()
 
     if (showAccountPage) {
         ImeAccountSubPage(
@@ -222,6 +219,21 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(12.dp))
 
+            SectionLabel("语音识别")
+            SettingsCard(cardBg) {
+                ParaformerModelSettingsSection(
+                    manager = AppGraph.paraformerModelManager,
+                )
+                ToggleRow(
+                    title = "仅本地处理（关闭云端润色）",
+                    checked = state.localRecognitionOnly,
+                    textColor = rowTextColor,
+                    onCheckedChange = { scope.launch { repo.setLocalRecognitionOnly(it) } },
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
             // Prompt tone — on/off toggle only (#8). The style picker was removed; the tone
             // always plays "喵" (handled in ToneController). No sub-text.
             SectionLabel("提示音")
@@ -236,7 +248,21 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(12.dp))
 
-            // 键盘管理 — switch 全拼/九宫格 in place (#2). Sits directly above 关于 (#22).
+            SectionLabel("键盘反馈")
+            SettingsCard(cardBg) {
+                ToggleRow(
+                    title = "键盘震动反馈",
+                    checked = keyboardHapticEnabled,
+                    textColor = rowTextColor,
+                    onCheckedChange = {
+                        scope.launch { prefs.inputFeedback.hapticEnabled.set(it) }
+                    },
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // 键盘管理只展示本应用支持用户选择的全拼/九宫格入口。
             SectionLabel("键盘管理")
             SettingsCard(cardBg) {
                 SelectRow(
@@ -250,18 +276,6 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
                     selected = keyboardStyle == KEYBOARD_STYLE_T9,
                     textColor = rowTextColor,
                     onClick = { scope.launch { prefs.internal.selectedKeyboardStyle.set(KEYBOARD_STYLE_T9) } },
-                )
-                // 手写 entry (阶段4): swaps the active subtype to HANDWRITING_DEFAULT in place,
-                // same live-reseed mechanism as 全拼/九宫格. TextInputLayout detects the subtype
-                // via HandwritingLanguageProvider.ProviderId and swaps in the ink pad.
-                SelectRow(
-                    title = "手写输入",
-                    selected = keyboardStyle == KEYBOARD_STYLE_HANDWRITING,
-                    textColor = rowTextColor,
-                    onClick = {
-                        scope.launch { prefs.internal.selectedKeyboardStyle.set(KEYBOARD_STYLE_HANDWRITING) }
-                        backToKeyboard()
-                    },
                 )
             }
 

@@ -1,33 +1,42 @@
 package com.wordtaker.keyboard.wordtaker.polish
 
-import kotlinx.coroutines.delay
-
-/**
- * Text-polishing boundary. Real implementations (e.g. RelayClient) can be swapped
- * in later without touching the UI layer.
- */
-interface Polisher {
-    /** Polish [raw] recognized text according to the AI [role]. */
-    suspend fun polish(raw: String, role: String): String
+/** Payload-free outcome carried with the committed text; never stores transcript or credentials. */
+enum class PolishOutcomeKind {
+    ShortDirect,
+    OfflineDirect,
+    Polished,
+    FallbackQuota,
+    FallbackAuthExpired,
+    FallbackTimeout,
+    FallbackNetwork,
+    FallbackServer,
+    FallbackUnknown,
 }
 
-/** Mock polisher returning role-specific canned rewrites after a fake delay. */
-class MockPolisher : Polisher {
+/** Text plus its immutable processing outcome, scoped to one transcript segment. */
+data class PolishResult(
+    val text: String,
+    val outcome: PolishOutcomeKind,
+)
 
-    override suspend fun polish(raw: String, role: String): String {
-        delay(POLISH_DELAY_MS)
-        return when (role) {
-            ROLE_GAOEQ -> POLISHED_GAOEQ
-            else -> POLISHED_DEFAULT
-        }
-    }
+/**
+ * Text-polishing boundary. Cloud implementations can be swapped without touching the UI layer.
+ */
+interface Polisher {
+    /**
+     * Whether a real polish attempt can be made now.
+     *
+     * Voice input checks this only after the transcript exceeds its local-direct threshold.
+     */
+    fun isAvailable(): Boolean = true
 
-    private companion object {
-        const val POLISH_DELAY_MS = 1200L
-        const val ROLE_GAOEQ = "gaoeq"
-        const val POLISHED_GAOEQ =
-            "这个方案整体方向很不错，如果细节上我们能再一起打磨打磨，就更完善了。"
-        const val POLISHED_DEFAULT =
-            "我想说的是，这个方案整体可行，细节方面还需要再讨论一下。"
-    }
+    /** Polish [raw] recognized text according to the AI [role]. */
+    suspend fun polish(raw: String, role: String): String
+
+    /**
+     * Structured compatibility boundary. Production implementations override this so
+     * fallbacks remain attributable; simple/test implementations retain polished semantics.
+     */
+    suspend fun polishResult(raw: String, role: String): PolishResult =
+        PolishResult(polish(raw, role), PolishOutcomeKind.Polished)
 }

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/development-emulator-model-output-v1.json",
+  "title": "KittyEcho development-emulator dev96 raw model output v1",
+  "description": "Development-only emulator output. It has no formal, product, or production authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "dataset_id", "model_alias",
+    "decoder_contract_id", "pcm_contract_id", "input_transform_id",
+    "snapshot_fingerprint_sha256", "development_decoder_plan_sha256",
+    "reference_accessed", "predictions", "eligibility"
+  ],
+  "properties": {
+    "schema_version": {"const": "development-emulator-model-output-v1"},
+    "run_id": {"type": "string", "pattern": "^run_[0-9a-f]{12}$"},
+    "dataset_id": {"type": "string", "pattern": "^dataset_[0-9a-f]{12}$"},
+    "model_alias": {"type": "string", "pattern": "^M[0-9]{3}$"},
+    "decoder_contract_id": {"const": "first-layer-raw-v1"},
+    "pcm_contract_id": {"const": "pcm16k-mono-s16le-v1"},
+    "input_transform_id": {"const": "canonical-pcm-direct-v1"},
+    "snapshot_fingerprint_sha256": {"$ref": "#/$defs/sha256"},
+    "development_decoder_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "reference_accessed": {"const": false},
+    "predictions": {
+      "type": "array",
+      "minItems": 96,
+      "maxItems": 96,
+      "items": {"$ref": "#/$defs/prediction"}
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "development_only", "emulator_only", "formal_eligible",
+        "product_decision_eligible", "production_eligible"
+      ],
+      "properties": {
+        "development_only": {"const": true},
+        "emulator_only": {"const": true},
+        "formal_eligible": {"const": false},
+        "product_decision_eligible": {"const": false},
+        "production_eligible": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "prediction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clip_id", "pcm_sha256", "pcm_payload_sha256", "hypothesis",
+        "status", "error_code", "stop_to_final_ns"
+      ],
+      "properties": {
+        "clip_id": {"type": "string", "pattern": "^clip_[0-9a-f]{12}$"},
+        "pcm_sha256": {"$ref": "#/$defs/sha256"},
+        "pcm_payload_sha256": {"$ref": "#/$defs/sha256"},
+        "hypothesis": {"type": "string", "maxLength": 100000},
+        "status": {"enum": ["ok", "error"]},
+        "error_code": {
+          "type": ["string", "null"],
+          "enum": [null, "oom", "crash", "decode_error"]
+        },
+        "stop_to_final_ns": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

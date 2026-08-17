@@ -58,6 +58,7 @@ class BackendClientTest : FunSpec({
         rules.length() shouldBe 1
         rules.getJSONObject(0).getString("from") shouldBe "周"
         rules.getJSONObject(0).getString("to") shouldBe "州"
+        body.keys().asSequence().toSet() shouldBe setOf("text", "mode", "word_map")
 
         out.text shouldBe "润色后"
         out.visibleChars shouldBe 3
@@ -74,6 +75,7 @@ class BackendClientTest : FunSpec({
         val body = JSONObject(recorded.body.readUtf8())
         body.has("word_map") shouldBe false
         body.getString("mode") shouldBe "gaoeq"
+        body.keys().asSequence().toSet() shouldBe setOf("text", "mode")
     }
 
     test("quota error maps to structured HTTP exception with backend code") {
@@ -229,7 +231,7 @@ class BackendClientTest : FunSpec({
         login.accessToken shouldBe "tok-wx"
     }
 
-    test("authMe and getLocalPrompt hit contract paths") {
+    test("authMe hits contract path") {
         token = "tok"
         server.enqueue(
             MockResponse().setBody(
@@ -241,15 +243,6 @@ class BackendClientTest : FunSpec({
         recorded.path shouldBe "/aiapi/auth/me"
         recorded.getHeader("Authorization") shouldBe "Bearer tok"
         me.getJSONObject("account").getString("userId") shouldBe "u1"
-
-        server.enqueue(
-            MockResponse().setBody(
-                """{"success":true,"data":{"mode":"polish","systemPrompt":"p","version":1}}""",
-            ),
-        )
-        val prompt = client().getLocalPrompt("polish")
-        server.takeRequest().path shouldBe "/aiapi/prompt?mode=polish"
-        prompt?.getString("systemPrompt") shouldBe "p"
     }
 
     test("device id derivation is salted sha256 truncated to 32 lowercase hex") {

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/engineering-report-v1.json",
+  "title": "KittyEcho sanitized anonymous engineering report v1",
+  "description": "Controlled decision-role input generated only after the accuracy report is frozen.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "dataset_id", "model_alias",
+    "accuracy_report_sha256", "accuracy_output_sha256", "public_plan_sha256",
+    "engineering_proof_sha256", "trusted_runner_status", "hard_gates"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "pattern": "^run_[0-9a-f]{12}$"},
+    "dataset_id": {"type": "string", "pattern": "^dataset_[0-9a-f]{12}$"},
+    "model_alias": {"type": "string", "pattern": "^M[0-9]{3}$"},
+    "accuracy_report_sha256": {"$ref": "#/$defs/sha256"},
+    "accuracy_output_sha256": {"$ref": "#/$defs/sha256"},
+    "public_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "engineering_proof_sha256": {"$ref": "#/$defs/sha256"},
+    "trusted_runner_status": {"const": "phase_b_required"},
+    "hard_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_resource_bytes", "peak_rss_bytes", "oom_count", "crash_count",
+        "cold_start", "warm_start", "stability",
+        "normal_short_stop_to_final", "decode_failure_count", "loop_count",
+        "successful_loop_count"
+      ],
+      "properties": {
+        "total_resource_bytes": {"$ref": "#/$defs/nonnegative_integer"},
+        "peak_rss_bytes": {"$ref": "#/$defs/nonnegative_integer"},
+        "oom_count": {"$ref": "#/$defs/nonnegative_integer"},
+        "crash_count": {"$ref": "#/$defs/nonnegative_integer"},
+        "cold_start": {"$ref": "#/$defs/timing_summary"},
+        "warm_start": {"$ref": "#/$defs/timing_summary"},
+        "stability": {"$ref": "#/$defs/stability"},
+        "normal_short_stop_to_final": {"$ref": "#/$defs/timing_summary"},
+        "decode_failure_count": {"$ref": "#/$defs/nonnegative_integer"},
+        "loop_count": {"$ref": "#/$defs/nonnegative_integer"},
+        "successful_loop_count": {"$ref": "#/$defs/nonnegative_integer"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nonnegative_integer": {"type": "integer", "minimum": 0},
+    "nonnegative_number": {"type": "number", "minimum": 0},
+    "nullable_nonnegative_number": {
+      "oneOf": [
+        {"$ref": "#/$defs/nonnegative_number"},
+        {"type": "null"}
+      ]
+    },
+    "timing_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "p50_ms", "p95_ms", "max_ms"],
+      "properties": {
+        "count": {"$ref": "#/$defs/nonnegative_integer"},
+        "p50_ms": {"$ref": "#/$defs/nullable_nonnegative_number"},
+        "p95_ms": {"$ref": "#/$defs/nullable_nonnegative_number"},
+        "max_ms": {"$ref": "#/$defs/nullable_nonnegative_number"}
+      }
+    },
+    "stability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "duration_seconds", "failure_count", "completed", "max_thermal_status"
+      ],
+      "properties": {
+        "duration_seconds": {"$ref": "#/$defs/nonnegative_number"},
+        "failure_count": {"$ref": "#/$defs/nonnegative_integer"},
+        "completed": {"type": "boolean"},
+        "max_thermal_status": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 6
+        }
+      }
+    }
+  }
+}

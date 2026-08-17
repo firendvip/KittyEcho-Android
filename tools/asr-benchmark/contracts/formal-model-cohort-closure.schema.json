@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/formal-model-cohort-closure-v1.json",
+  "title": "KittyEcho anonymous formal model cohort closure payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "receipt_contract_id",
+    "scope",
+    "registry_snapshot_sha256",
+    "protocol_profile",
+    "cohort_id",
+    "cohort_model_ids_sha256",
+    "model_count",
+    "formal_artifact_set_sha256",
+    "formal_risk_acceptance_set_sha256",
+    "formal_model_cohort_sha256",
+    "public_plan_sha256",
+    "benchmark_evidence_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f]{12}$"
+    },
+    "receipt_contract_id": {
+      "const": "formal-model-cohort-closure-v1"
+    },
+    "scope": {"const": "internal_evaluation_download_only"},
+    "registry_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "protocol_profile": {
+      "enum": ["exploration", "production_confirmation"]
+    },
+    "cohort_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_]{1,63}$"
+    },
+    "cohort_model_ids_sha256": {"$ref": "#/$defs/sha256"},
+    "model_count": {"type": "integer", "minimum": 2},
+    "formal_artifact_set_sha256": {"$ref": "#/$defs/sha256"},
+    "formal_risk_acceptance_set_sha256": {"$ref": "#/$defs/sha256"},
+    "formal_model_cohort_sha256": {"$ref": "#/$defs/sha256"},
+    "public_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "benchmark_evidence_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

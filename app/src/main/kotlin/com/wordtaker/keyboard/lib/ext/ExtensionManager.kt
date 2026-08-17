@@ -149,7 +149,7 @@ class ExtensionManager(context: Context) {
         // `extensions` StateFlow. `extensions` is produced by combine(...).stateIn() on
         // `defaultScope`, which re-emits asynchronously (a coroutine dispatch away) AFTER
         // any one source index's `flow.value` is updated by ExtensionIndex.refresh(). Under
-        // heavy CPU contention (e.g. cold-start ASR model load, see ZipformerController)
+        // heavy CPU contention (for example a cold-start on-device ASR model load)
         // dispatcher delivery can lag long enough that a caller sees a stale (often empty)
         // `extensions.value` right after a source index has already been populated,
         // throwing a spurious "Extension ... not found" (surfaced as a devtools overlay /

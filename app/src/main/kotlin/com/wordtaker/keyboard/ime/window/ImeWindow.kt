@@ -65,6 +65,8 @@ import com.wordtaker.keyboard.app.devtools.DevtoolsOverlay
 import com.wordtaker.keyboard.ime.ImeUiMode
 import com.wordtaker.keyboard.ime.clipboard.ClipboardInputLayout
 import com.wordtaker.keyboard.wordtaker.voice.CatKeyboardLayout
+import com.wordtaker.keyboard.wordtaker.voice.ImeSettingsVoiceToolbarRow
+import com.wordtaker.keyboard.wordtaker.voice.VoiceTrigger
 import com.wordtaker.keyboard.wordtaker.history.ImeHistoryLayout
 import com.wordtaker.keyboard.wordtaker.settings.ImeSettingsLayout
 import com.wordtaker.keyboard.wordtaker.toolbar.ImeToolbar
@@ -75,6 +77,7 @@ import com.wordtaker.keyboard.ime.sheet.BottomSheetWindow
 import com.wordtaker.keyboard.ime.text.TextInputLayout
 import com.wordtaker.keyboard.ime.theme.FlorisImeUi
 import com.wordtaker.keyboard.keyboardManager
+import com.wordtaker.keyboard.wordtaker.voice.catStripHeight
 import kotlinx.coroutines.delay
 import com.wordtaker.lib.compose.ProvideActualLayoutDirection
 import com.wordtaker.lib.compose.conditional
@@ -100,12 +103,6 @@ import com.wordtaker.lib.snygg.ui.rememberSnyggThemeQuery
  * @see BottomSheetWindow
  * @see DevtoolsOverlay
  */
-// 微信风底部悬浮空隙: fixed 模式下键盘内容之下的固定空白，让键盘不贴屏幕最底。
-// 空隙渲染为键盘底色 (WindowInner 的 SnyggBox 背景铺满 padding 之外)，并计入 IME 窗口高度，
-// 故宿主 App 内容会被相应顶起、不被遮挡。
-// batch3-A: 原固定 15dp (@395dp 基准屏) 改为按实际屏宽比例，真机占屏比例 1:1。
-private const val FIXED_BOTTOM_GAP_RATIO = 15f / 395f
-
 // item3: 键盘↔设置↔历史等模式切换的淡入淡出时长 —— 高度已恒定，只做 120ms fade。
 private const val MODE_SWITCH_FADE_MS = 120
 
@@ -218,10 +215,16 @@ private fun ImeInnerWindow() {
 
     val state by keyboardManager.activeState.collectAsState()
     val windowSpec by windowController.activeWindowSpec.collectAsState()
+    val windowConfig by windowController.activeWindowConfig.collectAsState()
 
-    // batch3-A: 底部空隙 = 屏宽 x 比例；根窗口宽未知 (首帧/Fallback) 时退回 15dp。
-    val rootWidth = windowSpec.constraints.rootBounds.dpRectWidth
-    val fixedBottomGap = if (rootWidth > 0.dp) rootWidth * FIXED_BOTTOM_GAP_RATIO else 15.dp
+    // This gap belongs to WindowInner, outside every mode's content. Growing the bottom-anchored
+    // measured window raises all content equally while preserving its sizes and touch geometry.
+    val fixedBottomGap = ImeErgonomicOffsetPolicy.upwardOffset(
+        rootWidth = windowSpec.constraints.rootBounds.dpRectWidth.value,
+        formFactor = windowSpec.constraints.formFactor.typeGuess,
+        windowMode = windowConfig.mode,
+        fixedMode = windowConfig.fixedMode,
+    ).dp
 
     ProvideActualLayoutDirection {
         val layoutDirection = LocalLayoutDirection.current
@@ -242,11 +245,7 @@ private fun ImeInnerWindow() {
                     .padding(
                         start = props.paddingLeft.coerceAtLeast(0.dp),
                         end = props.paddingRight.coerceAtLeast(0.dp),
-                        // 微信风: 键盘整体不再贴屏幕最底，底部留一条固定空隙 (键盘底色填充)。
-                        // 这条空隙加在用户可调 paddingBottom 之上；因为窗口是 wrapContentHeight，
-                        // 内容变高会让整个 IME 窗口变高，onGloballyPositioned 上报的窗口 top 随之上移，
-                        // onComputeInsets 的 contentTopInsets = windowBounds.top 因此已含这条空隙，
-                        // 宿主 App 内容被顶起相同高度，绝不会被空隙遮挡或重叠。
+                        // Preserve user padding and add the ergonomic gap outside all mode content.
                         bottom = props.paddingBottom.coerceAtLeast(0.dp) + fixedBottomGap,
                     )
             }
@@ -283,13 +282,39 @@ private fun ImeInnerWindow() {
                         ImeUiMode.MEDIA -> { ImeToolbar(); ProvideActualLayoutDirection { MediaInputLayout() } }
                         ImeUiMode.CLIPBOARD -> { ImeToolbar(); ProvideActualLayoutDirection { ClipboardInputLayout() } }
                         ImeUiMode.HISTORY -> { ImeToolbar(); ProvideActualLayoutDirection { ImeHistoryLayout() } }
-                        ImeUiMode.SETTINGS -> { ImeToolbar(); ProvideActualLayoutDirection { ImeSettingsLayout() } }
+                        ImeUiMode.SETTINGS -> {
+                            ImeSettingsToolbarSlot()
+                            ProvideActualLayoutDirection { ImeSettingsLayout() }
+                        }
                     }
                 }
             }
             ImeSystemUiFloating()
         }
         ImeWindowResizeHandlesFixed()
+    }
+}
+
+/** Settings uses the exact same full-height primary toolbar actions as idle text. */
+@Composable
+private fun ImeSettingsToolbarSlot() {
+    val context = LocalContext.current
+    val keyboardManager by context.keyboardManager()
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(catStripHeight()),
+        contentAlignment = Alignment.Center,
+    ) {
+        ImeSettingsVoiceToolbarRow(
+            onCatClick = {
+                keyboardManager.activeState.imeUiMode = ImeUiMode.TEXT
+            },
+            onStartRecording = {
+                keyboardManager.activeState.imeUiMode = ImeUiMode.TEXT
+                VoiceTrigger.requestStart()
+            },
+        )
     }
 }
 

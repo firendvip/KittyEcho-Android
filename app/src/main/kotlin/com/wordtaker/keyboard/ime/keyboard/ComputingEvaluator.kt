@@ -344,11 +344,10 @@ fun ComputingEvaluator.computeImageVector(data: KeyData): ImageVector? {
                 KeyboardMode.PHONE2 -> {
                     Icons.Default.SpaceBar
                 }
-                // WeChat-style spacebar in the main keyboard: a small voice-level
-                // WAVEFORM glyph (matches the reference) instead of a language label
-                // or a mic. Short-press still types a space / commits the first
-                // candidate (handled elsewhere).
-                else -> this.context()?.vectorResource(R.drawable.ic_wt_wave)
+                // Main keyboard: reuse KittyEcho's existing "语音说话" microphone vector.
+                // This is visual only; short press, long press and swipe behavior stay on
+                // the existing space-key event paths.
+                else -> this.context()?.vectorResource(R.drawable.ic_wt_voice)
             }
         }
         KeyCode.UNDO -> {

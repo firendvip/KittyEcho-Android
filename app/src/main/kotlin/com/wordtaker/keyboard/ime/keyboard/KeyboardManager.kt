@@ -35,10 +35,12 @@ import com.wordtaker.keyboard.ime.core.DisplayLanguageNamesIn
 import com.wordtaker.keyboard.ime.core.Subtype
 import com.wordtaker.keyboard.ime.core.SubtypePreset
 import com.wordtaker.keyboard.ime.editor.EditorContent
+import com.wordtaker.keyboard.ime.editor.EnterKeyFollowUp
 import com.wordtaker.keyboard.ime.editor.FlorisEditorInfo
 import com.wordtaker.keyboard.ime.editor.ImeOptions
 import com.wordtaker.keyboard.ime.editor.InputAttributes
 import com.wordtaker.keyboard.ime.editor.OperationUnit
+import com.wordtaker.keyboard.ime.editor.enterKeyFollowUp
 import com.wordtaker.keyboard.ime.input.CapitalizationBehavior
 import com.wordtaker.keyboard.ime.input.InputEventDispatcher
 import com.wordtaker.keyboard.ime.input.InputKeyEventReceiver
@@ -46,6 +48,14 @@ import com.wordtaker.keyboard.ime.input.InputShiftState
 import com.wordtaker.keyboard.ime.nlp.ClipboardSuggestionCandidate
 import com.wordtaker.keyboard.ime.nlp.PunctuationRule
 import com.wordtaker.keyboard.ime.nlp.SuggestionCandidate
+import com.wordtaker.keyboard.ime.nlp.pinyin.PinyinCandidateSelectionPlan
+import com.wordtaker.keyboard.ime.nlp.pinyin.PinyinBackspacePlan
+import com.wordtaker.keyboard.ime.nlp.pinyin.PinyinSegmentedCompositionState
+import com.wordtaker.keyboard.ime.nlp.pinyin.PinyinSegmentedSuggestionCandidate
+import com.wordtaker.keyboard.ime.nlp.pinyin.ResolvedPinyinSuggestionCandidate
+import com.wordtaker.keyboard.ime.nlp.pinyin.activePinyinCompositionSession
+import com.wordtaker.keyboard.ime.nlp.pinyin.planPinyinBackspace
+import com.wordtaker.keyboard.ime.nlp.pinyin.planPinyinCandidateSelection
 import com.wordtaker.keyboard.ime.popup.PopupMappingComponent
 import com.wordtaker.keyboard.ime.text.composing.Composer
 import com.wordtaker.keyboard.ime.text.gestures.SwipeAction
@@ -86,6 +96,53 @@ import com.wordtaker.lib.kotlin.collectIn
 import com.wordtaker.lib.kotlin.collectLatestIn
 
 private val DoubleSpacePeriodMatcher = """([^.!?‽\s]\s)""".toRegex()
+
+internal enum class LanguageSwitchCompositionAction {
+    None,
+    Candidate,
+    Raw,
+}
+
+internal data class LanguageSwitchPlan(
+    val targetImeUiMode: ImeUiMode,
+    val isEnglishMode: Boolean,
+    val isComposingEnabled: Boolean,
+    val compositionAction: LanguageSwitchCompositionAction,
+)
+
+internal fun preferredLanguageSwitchCandidate(
+    candidates: List<SuggestionCandidate>,
+): SuggestionCandidate? = candidates.firstOrNull()
+
+/**
+ * Pure event-routing policy for the short 中/英 press. Voice progress is deliberately absent:
+ * recording completion, recognition, polishing, and success all use this same route.
+ */
+@Suppress("UNUSED_PARAMETER")
+internal fun planLanguageSwitch(
+    currentImeUiMode: ImeUiMode,
+    isEnglishMode: Boolean,
+    keyVariation: KeyVariation,
+    suggestionsEnabled: Boolean,
+    providerForcesSuggestions: Boolean,
+    hasComposing: Boolean,
+    hasPreferredCandidate: Boolean,
+): LanguageSwitchPlan {
+    val nowEnglish = !isEnglishMode
+    val compositionAction = when {
+        !hasComposing -> LanguageSwitchCompositionAction.None
+        hasPreferredCandidate -> LanguageSwitchCompositionAction.Candidate
+        else -> LanguageSwitchCompositionAction.Raw
+    }
+    return LanguageSwitchPlan(
+        targetImeUiMode = ImeUiMode.TEXT,
+        isEnglishMode = nowEnglish,
+        isComposingEnabled = !nowEnglish &&
+            keyVariation != KeyVariation.PASSWORD &&
+            (suggestionsEnabled || providerForcesSuggestions),
+        compositionAction = compositionAction,
+    )
+}
 
 class KeyboardManager(context: Context) : InputKeyEventReceiver {
     private val prefs by FlorisPreferenceStore
@@ -322,12 +379,90 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
     }
 
     fun commitCandidate(candidate: SuggestionCandidate) {
+        commitCandidate(candidate, allowPartialPinyinSelection = true)
+    }
+
+    private fun commitCandidate(
+        candidate: SuggestionCandidate,
+        allowPartialPinyinSelection: Boolean,
+    ) {
+        if (candidate is PinyinSegmentedSuggestionCandidate) {
+            commitSegmentedPinyinCandidate(candidate, allowPartialPinyinSelection)
+            return
+        }
+        activePinyinCompositionSession.clear()
         scope.launch {
             candidate.sourceProvider?.notifySuggestionAccepted(subtypeManager.activeSubtype, candidate)
         }
         when (candidate) {
             is ClipboardSuggestionCandidate -> editorInstance.commitClipboardItem(candidate.clipboardItem)
             else -> editorInstance.commitCompletion(candidate)
+        }
+    }
+
+    private fun commitSegmentedPinyinCandidate(
+        candidate: PinyinSegmentedSuggestionCandidate,
+        allowPartialSelection: Boolean,
+    ) {
+        val currentState = activePinyinCompositionSession.current()
+        when (
+            val plan = planPinyinCandidateSelection(
+                candidateText = candidate.text,
+                selection = candidate.selection,
+                currentState = currentState,
+                currentComposingText = editorInstance.activeContent.composingText,
+            )
+        ) {
+            PinyinCandidateSelectionPlan.Reject -> {
+                if (!allowPartialSelection) {
+                    // A language switch is an explicit composition boundary. If its visible
+                    // candidate became stale, preserve every composing character as-is.
+                    val composing = editorInstance.activeContent.composingText
+                    activePinyinCompositionSession.clear()
+                    editorInstance.finalizeComposingText(composing)
+                } else {
+                    // An ordinary stale candidate tap must not consume composing text.
+                    nlpManager.suggest(subtypeManager.activeSubtype, editorInstance.activeContent)
+                }
+            }
+            is PinyinCandidateSelectionPlan.Continue -> {
+                val expected = currentState ?: return
+                if (allowPartialSelection) {
+                    if (!activePinyinCompositionSession.transition(expected, plan.state)) return
+                    if (editorInstance.replaceComposingText(plan.state.displayText)) {
+                        scope.launch {
+                            candidate.sourceProvider?.notifySuggestionAccepted(
+                                subtypeManager.activeSubtype,
+                                candidate,
+                            )
+                        }
+                        nlpManager.suggest(subtypeManager.activeSubtype, editorInstance.activeContent)
+                    } else {
+                        activePinyinCompositionSession.restore(plan.state, expected)
+                    }
+                } else {
+                    commitResolvedPinyinCandidate(candidate, expected, plan.state.displayText)
+                }
+            }
+            is PinyinCandidateSelectionPlan.Commit -> {
+                val expected = currentState ?: return
+                commitResolvedPinyinCandidate(candidate, expected, plan.text)
+            }
+        }
+    }
+
+    private fun commitResolvedPinyinCandidate(
+        candidate: PinyinSegmentedSuggestionCandidate,
+        expected: PinyinSegmentedCompositionState,
+        committedText: String,
+    ) {
+        if (!activePinyinCompositionSession.transition(expected, null)) return
+        scope.launch {
+            candidate.sourceProvider?.notifySuggestionAccepted(subtypeManager.activeSubtype, candidate)
+        }
+        val resolved = ResolvedPinyinSuggestionCandidate(candidate, committedText)
+        if (!editorInstance.commitCompletion(resolved)) {
+            activePinyinCompositionSession.transition(null, expected)
         }
     }
 
@@ -475,6 +610,33 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
             it.isManualSelectionModeStart = false
             it.isManualSelectionModeEnd = false
         }
+        val currentPinyinState = activePinyinCompositionSession.current()
+        val observedPinyinState = if (
+            currentPinyinState != null && unit == OperationUnit.CHARACTERS
+        ) {
+            activePinyinCompositionSession.observe(editorInstance.activeContent.composingText)
+        } else {
+            currentPinyinState
+        }
+        when (
+            val plan = planPinyinBackspace(
+                state = observedPinyinState,
+                currentComposingText = editorInstance.activeContent.composingText,
+                isCharacterDelete = unit == OperationUnit.CHARACTERS,
+            )
+        ) {
+            is PinyinBackspacePlan.UndoSelection -> {
+                val expected = observedPinyinState ?: return
+                if (!activePinyinCompositionSession.transition(expected, plan.state)) return
+                if (editorInstance.replaceComposingText(plan.state.displayText)) {
+                    nlpManager.suggest(subtypeManager.activeSubtype, editorInstance.activeContent)
+                } else {
+                    activePinyinCompositionSession.restore(plan.state, expected)
+                }
+                return
+            }
+            PinyinBackspacePlan.DeleteNormally -> Unit
+        }
         revertPreviouslyAcceptedCandidate()
         editorInstance.deleteBackwards(unit)
     }
@@ -498,23 +660,21 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
     private fun handleEnter() {
         val info = editorInstance.activeInfo
         val isShiftPressed = inputEventDispatcher.isPressed(KeyCode.SHIFT)
-        if (editorInstance.tryPerformEnterCommitRaw()) {
-            return
-        }
-        if (info.imeOptions.flagNoEnterAction || info.inputAttributes.flagTextMultiLine && isShiftPressed) {
-            editorInstance.performEnter()
-        } else {
-            when (val action = info.imeOptions.action) {
-                ImeOptions.Action.DONE,
-                ImeOptions.Action.GO,
-                ImeOptions.Action.NEXT,
-                ImeOptions.Action.PREVIOUS,
-                ImeOptions.Action.SEARCH,
-                ImeOptions.Action.SEND -> {
-                    editorInstance.performEnterAction(action)
-                }
-                else -> editorInstance.performEnter()
-            }
+        val action = info.imeOptions.action
+        val hadRawComposition = editorInstance.tryPerformEnterCommitRaw()
+        when (
+            enterKeyFollowUp(
+                flagNoEnterAction = info.imeOptions.flagNoEnterAction,
+                isMultiline = info.inputAttributes.flagTextMultiLine,
+                isShiftPressed = isShiftPressed,
+                action = action,
+                hadRawComposition = hadRawComposition,
+            )
+        ) {
+            EnterKeyFollowUp.FINISH_AFTER_RAW -> Unit
+            EnterKeyFollowUp.INSERT_NEWLINE -> editorInstance.performEnter()
+            EnterKeyFollowUp.PERFORM_EDITOR_ACTION ->
+                editorInstance.performEnterAction(action)
         }
     }
 
@@ -525,21 +685,42 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
      * finalizes any in-progress composing and clears the candidate bar.
      */
     private fun handleLanguageSwitch() {
-        // Finalize / clear any pending pinyin composition before switching.
         val composing = editorInstance.activeContent.composingText
-        if (composing.isNotEmpty()) {
-            editorInstance.finalizeComposingText(composing)
+        val preferredCandidate = if (composing.isNotEmpty()) {
+            preferredLanguageSwitchCandidate(nlpManager.activeCandidates)
+        } else {
+            null
+        }
+        val plan = planLanguageSwitch(
+            currentImeUiMode = activeState.imeUiMode,
+            isEnglishMode = activeState.isEnglishMode,
+            keyVariation = activeState.keyVariation,
+            suggestionsEnabled = prefs.suggestion.enabled.get(),
+            providerForcesSuggestions =
+                nlpManager.providerForcesSuggestionOn(subtypeManager.activeSubtype),
+            hasComposing = composing.isNotEmpty(),
+            hasPreferredCandidate = preferredCandidate != null,
+        )
+
+        // Resolve the existing pinyin transaction before disabling its provider. Prefer the
+        // first visible Hanzi candidate; only finalize raw pinyin when no candidate is ready.
+        when (plan.compositionAction) {
+            LanguageSwitchCompositionAction.Candidate -> preferredCandidate?.let {
+                commitCandidate(it, allowPartialPinyinSelection = false)
+            }
+            LanguageSwitchCompositionAction.Raw -> {
+                activePinyinCompositionSession.clear()
+                editorInstance.finalizeComposingText(composing)
+            }
+            LanguageSwitchCompositionAction.None -> Unit
         }
         nlpManager.clearSuggestions()
 
-        val nowEnglish = !activeState.isEnglishMode
-        activeState.isEnglishMode = nowEnglish
-        // English mode must not form a composing region; Chinese mode re-enables it
-        // when the active provider forces suggestions on (the pinyin provider does).
-        activeState.isComposingEnabled = !nowEnglish &&
-            activeState.keyVariation != KeyVariation.PASSWORD &&
-            (prefs.suggestion.enabled.get() ||
-                nlpManager.providerForcesSuggestionOn(subtypeManager.activeSubtype))
+        // A stale post-recording surface must never retain HISTORY. Long press is handled
+        // separately by TextKeyboardLayout and still opens the system IME picker.
+        activeState.imeUiMode = plan.targetImeUiMode
+        activeState.isEnglishMode = plan.isEnglishMode
+        activeState.isComposingEnabled = plan.isComposingEnabled
     }
 
     /**
@@ -624,6 +805,7 @@ class KeyboardManager(context: Context) : InputKeyEventReceiver {
                 commitCandidate(firstCandidate)
             } else {
                 val raw = editorInstance.activeContent.composingText
+                activePinyinCompositionSession.clear()
                 editorInstance.finalizeComposingText(raw)
             }
             return

@@ -1,5 +1,6 @@
 package com.wordtaker.keyboard.wordtaker.cat
 
+import android.animation.ValueAnimator
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -15,6 +16,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -33,7 +36,6 @@ private const val HOLD = 1000f
 private const val HYST = 0.05f
 private const val FX_DWELL = 300f
 private const val ENTER_MS = 1400f
-private const val RETURN_MS = 800f
 private const val WALK_W = 0.022f
 private const val PROC_W = 0.04f
 // 需求4：所有头顶效果(音符/灯泡/星星/汗滴)必须出现在「猫运动方向的斜上方」。
@@ -69,14 +71,65 @@ private const val NOTE_DUR_MIN = 1.0f
 private const val NOTE_DUR_MAX = 1.7f
 private const val NOTE_DELAY_MAX = 0.25f
 
-private const val ZZZ_BASE_LEFT = 4f
-private const val ZZZ_STEP = 4f
-// item2: 抬到趴睡猫头顶之上 (head top demo-y≈49.5；py = DEMO_H - ZZZ_BOTTOM)。
-// 22→36 ⇒ Z 基座 demo-y≈36，明确高于头顶、从头顶上方自然冒出，不再压在身体上。
-private const val ZZZ_BOTTOM = 36f
-private val ZZZ_SIZES = floatArrayOf(8f, 10f, 12f) // s/m/l
-private val ZZZ_DELAYS_MS = floatArrayOf(0f, 700f, 1400f)
-private const val ZZZ_DUR = 3000f // csfxZz 3s loop
+internal object PcSleepDemoContract {
+    const val catWidthDemoPx = 36f
+    const val catHeightDemoPx = 20f
+    const val headFromLeftDemoPx = 9f
+    const val outwardDirection = -1f
+    const val zzzPeriodMs = 3_000f
+}
+
+internal data class SleepZzzSpec(
+    val sizeDemoPx: Float,
+    val delayMs: Float,
+    val outwardOffsetDemoPx: Float,
+    val bottomDemoPx: Float,
+)
+
+/**
+ * Values are copied from the PC CatSkinFx/CSS demo coordinate system. The sleeping sprite always
+ * faces left, independent of UI layout direction, so each positive offset is applied outward
+ * through [PcSleepDemoContract.outwardDirection].
+ */
+internal val sleepZzzSpecs = listOf(
+    SleepZzzSpec(sizeDemoPx = 8f, delayMs = 0f, outwardOffsetDemoPx = 4f, bottomDemoPx = 22f),
+    SleepZzzSpec(sizeDemoPx = 10f, delayMs = 700f, outwardOffsetDemoPx = 8f, bottomDemoPx = 25f),
+    SleepZzzSpec(sizeDemoPx = 12f, delayMs = 1400f, outwardOffsetDemoPx = 12f, bottomDemoPx = 28f),
+)
+
+internal fun demoPxToSp(sizeDemoPx: Float, density: Float, fontScale: Float): Float {
+    val androidScale = density * fontScale
+    return if (androidScale.isFinite() && androidScale > 0f) {
+        sizeDemoPx / androidScale
+    } else {
+        sizeDemoPx
+    }
+}
+
+internal data class SleepZzzAnimationFrame(
+    val translateXDemoPx: Float,
+    val translateYDemoPx: Float,
+    val scale: Float,
+    val alpha: Float,
+)
+
+internal fun sleepZzzAnimationFrame(progress: Float): SleepZzzAnimationFrame {
+    val p = progress.coerceIn(0f, 1f)
+    return SleepZzzAnimationFrame(
+        translateXDemoPx = lerp(
+            0f,
+            PcSleepDemoContract.outwardDirection * 3f,
+            p,
+        ),
+        translateYDemoPx = lerp(1f, -5f, p),
+        scale = lerp(0.85f, 1f, p),
+        alpha = if (p < 0.25f) {
+            p / 0.25f
+        } else {
+            1f - (p - 0.25f) / 0.75f
+        },
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Unified "demo world" coordinate space.
@@ -122,26 +175,20 @@ private class Note(
     val bornAt: Float,
 )
 
-/** A floating Z (mirrors a `.cs-fxzz` span). */
-private class Zzz(val sizePx: Float, val delayMs: Float)
-
 /** Mutable, non-recomposing animation holder, updated inside the frame loop. */
 private class CatRuntime {
-    var mode = "sleep"          // idle | enter | walk | settle | sleep
+    var mode = "sleep"          // idle | enter | walk | sleep
     var view = "none"           // none | run | sleep
     var x = 0f
     var wp = 0f
     var t0 = 0f
-    var xRet = 0f
     var lastDir = 1f
     var zzzPlaced = false
     var runScale = 1f
     var now = 0f
     var widthPx = 0f
 
-    var prevBusy = false
     var prevErr = false
-    var successUntil = 0f
     var errorUntil = 0f
     var lastVoice = -1e9f
     var loudState = false
@@ -152,12 +199,16 @@ private class CatRuntime {
     var lastNoteSpawn = 0f
 
     val notes = ArrayList<Note>()
-    var zzz: Array<Zzz>? = null
+    var zzz: List<SleepZzzSpec>? = null
     var zzzStart = 0f
 }
 
 @Composable
-fun CatSkin(state: CatState, modifier: Modifier = Modifier) {
+fun CatSkin(
+    state: CatState,
+    modifier: Modifier = Modifier,
+    animationsEnabled: Boolean = ValueAnimator.areAnimatorsEnabled(),
+) {
     val rt = remember { CatRuntime() }
     val paths = remember { CatPaths() }
     val measurer = rememberTextMeasurer()
@@ -166,21 +217,28 @@ fun CatSkin(state: CatState, modifier: Modifier = Modifier) {
     // Drives redraw: mutate rt in the loop, then bump ticker to invalidate Canvas.
     var ticker by remember { mutableLongStateOf(0L) }
 
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            val nanos = awaitFrame()
-            tick(rt, latest, nanos / 1_000_000f)
-            ticker = nanos
+    LaunchedEffect(animationsEnabled) {
+        if (animationsEnabled) {
+            while (isActive) {
+                val nanos = awaitFrame()
+                tick(rt, latest, nanos / 1_000_000f)
+                ticker = nanos
+            }
         }
     }
 
-    Canvas(modifier = modifier) {
+    Canvas(
+        modifier = modifier.semantics { hideFromAccessibility() },
+    ) {
         // Read ticker so this draw lambda re-runs each frame.
         @Suppress("UNUSED_EXPRESSION") ticker
         // tick() runs in the demo world coordinate space (width in demo units), so
         // convert the real canvas width to demo units via the uniform worldScale.
         val worldScale = size.height / DEMO_H
         rt.widthPx = if (worldScale > 0f) size.width / worldScale else size.width
+        if (!animationsEnabled) {
+            applyStaticState(rt, state)
+        }
         drawScene(rt, paths, measurer, worldScale)
     }
 }
@@ -206,25 +264,25 @@ private fun tick(rt: CatRuntime, s: CatState, now: Float) {
     val errRef = s.error
     val recRef = s.recording
     val lvlRef = s.level
+    val successRef = s.success
+    val polishingRef = s.polishing
 
     // edges
-    if (!busyRef && rt.prevBusy) rt.successUntil = now + 1200f
-    rt.prevBusy = busyRef
     if (errRef && !rt.prevErr) rt.errorUntil = now + 1500f
     rt.prevErr = errRef
 
     if (lvlRef > VOICE_THR) rt.lastVoice = now
     val voice = now - rt.lastVoice < HOLD
-    val active = recRef || busyRef
+    val active = recRef || busyRef || successRef
 
     if (!rt.loudState && lvlRef > LOUD_THR + HYST) rt.loudState = true
     else if (rt.loudState && lvlRef < LOUD_THR - HYST) rt.loudState = false
 
     // effect priority
     val priority: String? = when {
-        now < rt.successUntil -> "sparkle"
+        successRef -> "sparkle"
         now < rt.errorUntil -> "sweat"
-        busyRef -> "bulb"
+        busyRef && polishingRef -> "bulb"
         recRef && voice -> "notes"
         else -> null
     }
@@ -260,48 +318,42 @@ private fun tick(rt: CatRuntime, s: CatState, now: Float) {
         rt.notes.removeAll { n -> now - n.bornAt >= n.delayMs + n.durMs }
     }
 
-    val want = if (busyRef || (active && voice)) "walk" else "rest"
+    val wantsWalk = busyRef || successRef || (active && voice)
 
     // mode machine
     when (rt.mode) {
         "idle" -> {
-            if (active) { rt.mode = "enter"; rt.t0 = now; rt.view = "run" }
-            else { rt.mode = "sleep"; rt.view = "sleep"; rt.x = c; rt.zzzPlaced = false }
+            if (shouldSleepImmediately(active, wantsWalk)) {
+                enterSleep(rt, c, now)
+            } else {
+                rt.mode = "enter"
+                rt.t0 = now
+                rt.view = "run"
+            }
         }
         "enter" -> {
-            val te = ((now - rt.t0) / ENTER_MS).coerceAtMost(1f)
-            val ke = easeOut(te)
-            rt.x = enterFrom + (c - enterFrom) * ke
-            rt.runScale = 0.32f + 0.68f * ke
-            rt.lastDir = 1f
-            if (te >= 1f) {
-                rt.wp = 0f
-                if (!active) rt.mode = "idle"
-                else {
-                    rt.mode = if (want == "rest") "settle" else "walk"
-                    rt.t0 = now; rt.xRet = rt.x
+            if (shouldSleepImmediately(active, wantsWalk)) {
+                enterSleep(rt, c, now)
+            } else {
+                val te = ((now - rt.t0) / ENTER_MS).coerceAtMost(1f)
+                val ke = easeOut(te)
+                rt.x = enterFrom + (c - enterFrom) * ke
+                rt.runScale = 0.32f + 0.68f * ke
+                rt.lastDir = 1f
+                if (te >= 1f) {
+                    rt.wp = 0f
+                    rt.mode = "walk"
                 }
             }
         }
         "walk" -> {
-            if (!active || want == "rest") { rt.mode = "settle"; rt.t0 = now; rt.xRet = rt.x }
-            else {
+            if (shouldSleepImmediately(active, wantsWalk)) {
+                enterSleep(rt, c, now)
+            } else {
                 rt.wp += if (busyRef || rt.loudState) PROC_W else WALK_W
                 rt.x = c + amp * sin(rt.wp)
                 rt.lastDir = if (cos(rt.wp) >= 0f) 1f else -1f
                 rt.runScale = 1f
-            }
-        }
-        "settle" -> {
-            if (active && want != "rest") { rt.mode = "walk"; rt.wp = 0f; rt.view = "run" }
-            else {
-                val tr = ((now - rt.t0) / RETURN_MS).coerceAtMost(1f)
-                val kr = easeOut(tr)
-                rt.x = rt.xRet + (c - rt.xRet) * kr
-                rt.lastDir = if (c - rt.x >= 0f) 1f else -1f
-                // 需求#6：离场(走回)时由大变小，像走向远处 —— 与 enter 的 0.32→1.0 对称。
-                rt.runScale = 1f - 0.68f * kr
-                if (tr >= 1f) { rt.mode = "sleep"; rt.view = "sleep"; rt.x = c; rt.zzzPlaced = false }
             }
         }
         "sleep" -> {
@@ -309,16 +361,12 @@ private fun tick(rt: CatRuntime, s: CatState, now: Float) {
             rt.view = "sleep"
             if (priority == null) {
                 if (!rt.zzzPlaced) {
-                    rt.zzz = arrayOf(
-                        Zzz(ZZZ_SIZES[0], ZZZ_DELAYS_MS[0]),
-                        Zzz(ZZZ_SIZES[1], ZZZ_DELAYS_MS[1]),
-                        Zzz(ZZZ_SIZES[2], ZZZ_DELAYS_MS[2]),
-                    )
+                    rt.zzz = sleepZzzSpecs
                     rt.zzzStart = now
                     rt.zzzPlaced = true
                 }
             } else if (rt.zzzPlaced) { rt.zzz = null; rt.zzzPlaced = false }
-            if (active && want != "rest") {
+            if (active && wantsWalk) {
                 rt.mode = "walk"; rt.view = "run"; rt.wp = 0f
                 rt.zzzPlaced = false; rt.zzz = null
             }
@@ -327,6 +375,44 @@ private fun tick(rt: CatRuntime, s: CatState, now: Float) {
     if (rt.mode != "sleep") rt.zzz = null
 
     rt.now = now
+}
+
+internal fun shouldSleepImmediately(active: Boolean, wantsWalk: Boolean): Boolean =
+    !active || !wantsWalk
+
+private fun enterSleep(rt: CatRuntime, center: Float, now: Float) {
+    rt.mode = "sleep"
+    rt.view = "sleep"
+    rt.x = center
+    rt.runScale = 1f
+    rt.fxShownType = null
+    rt.fxPendingType = null
+    rt.notes.clear()
+    rt.zzz = sleepZzzSpecs
+    rt.zzzStart = now
+    rt.zzzPlaced = true
+}
+
+private fun applyStaticState(rt: CatRuntime, state: CatState) {
+    val active = state.recording || state.busy || state.success
+    val center = geom(rt.widthPx).c
+    rt.mode = if (active) "walk" else "sleep"
+    rt.view = if (active) "run" else "sleep"
+    rt.x = center
+    rt.wp = 0f
+    rt.lastDir = 1f
+    rt.runScale = 1f
+    rt.fxShownType = when {
+        state.success -> "sparkle"
+        state.error -> "sweat"
+        state.busy && state.polishing -> "bulb"
+        else -> null
+    }
+    rt.notes.clear()
+    rt.zzz = if (active) null else sleepZzzSpecs
+    rt.zzzStart = if (active) 0f else -2_000f
+    rt.zzzPlaced = !active
+    rt.now = 0f
 }
 
 private fun spawnNote(rt: CatRuntime, now: Float) {
@@ -386,12 +472,18 @@ private fun DrawScope.drawDemoWorld(
     when (rt.view) {
         "sleep" -> {
             val phase = (rt.now % SLEEP_BREATHE_MS) / SLEEP_BREATHE_MS
-            // Native sprite size, bottom-centred at the demo origin — identical scale to
-            // the running cat so sleep <-> walk never changes size (the previous version
-            // blew the sleeping cat up independently, which also detached the FX anchor).
-            val left = g.c - SLEEP_VB_W / 2f
-            translate(left, bottomY - SLEEP_VB_H) {
-                drawSleepCat(paths, phase)
+            // PC renders the 44x24 SVG viewBox into a 36x20 CSS box. Preserve that rendered
+            // demo size before the one shared worldScale; this only shrinks the previous Android
+            // sleeper and never introduces a separate cat enlargement.
+            val left = g.c - PcSleepDemoContract.catWidthDemoPx / 2f
+            translate(left, bottomY - PcSleepDemoContract.catHeightDemoPx) {
+                scale(
+                    scaleX = PcSleepDemoContract.catWidthDemoPx / SLEEP_VB_W,
+                    scaleY = PcSleepDemoContract.catHeightDemoPx / SLEEP_VB_H,
+                    pivot = Offset.Zero,
+                ) {
+                    drawSleepCat(paths, phase)
+                }
             }
         }
         "run" -> {
@@ -467,37 +559,52 @@ private fun DrawScope.drawNotes(rt: CatRuntime, baseX: Float, baseY: Float, meas
     }
 }
 
-private fun DrawScope.drawZzz(rt: CatRuntime, zs: Array<Zzz>, g: Geom, measurer: TextMeasurer) {
-    // 趴睡猫 (SLEEP_SVG, viewBox 0..44) 头部在左侧 (cx≈11)，画在 left = g.c - 22 处，
-    // 故头中心 ≈ g.c - 11、头顶 demo-y ≈ 49.5。Zzz 必须从「头顶上方」自然冒出 (item2)：
-    //  - 水平锚到头部、并向头朝外侧 (左) 错峰升起，不再压在身体上；
-    //  - 垂直抬到头顶之上 (py 用更大的 ZZZ_BOTTOM ⇒ demo-y 更小=更高)。
-    val dir = -1f // 趴睡猫头朝左，Zzz 向左上方飘
-    val headX = g.c - 11f
+private fun DrawScope.drawZzz(
+    rt: CatRuntime,
+    zs: List<SleepZzzSpec>,
+    g: Geom,
+    measurer: TextMeasurer,
+) {
+    // PC positions the 36px sleeper at center-18 and anchors the left-facing head at +9px.
+    // CSS `bottom` is measured from each line box's bottom, so subtract the measured height
+    // before applying the keyframe translation.
+    val headX = g.c - PcSleepDemoContract.catWidthDemoPx / 2f +
+        PcSleepDemoContract.headFromLeftDemoPx
     for (k in zs.indices) {
         val z = zs[k]
         val cycleTime = rt.now - rt.zzzStart - z.delayMs
         if (cycleTime < 0f) continue
-        val p = (cycleTime % ZZZ_DUR) / ZZZ_DUR
-        // csfxZz: translate(0,1)scale.85 -> translate(zdir*3,-5)scale1 ; op in@25% out@100%
-        val tx = lerp(0f, dir * 3f, p)
-        val ty = lerp(1f, -5f, p)
-        val sc = lerp(0.85f, 1f, p)
-        val alpha = if (p < 0.25f) p / 0.25f else 1f - (p - 0.25f) / 0.75f
-        val left = headX + dir * (ZZZ_BASE_LEFT + k * ZZZ_STEP)
-        val bottom = ZZZ_BOTTOM + k * 3f
-        val px = left + tx
-        val py = (DEMO_H - bottom) + ty
-        scale(sc, sc, pivot = Offset(px, py)) {
-            val layout = measurer.measure(
-                text = "Z",
-                style = TextStyle(
-                    color = ZZZ_COLOR,
-                    fontSize = z.sizePx.sp,
-                    fontWeight = FontWeight.Bold,
-                ),
-            )
-            drawText(layout, topLeft = Offset(px, py), alpha = alpha.coerceIn(0f, 1f))
+        val progress = (cycleTime % PcSleepDemoContract.zzzPeriodMs) /
+            PcSleepDemoContract.zzzPeriodMs
+        val frame = sleepZzzAnimationFrame(progress)
+        val fontSizeSp = demoPxToSp(z.sizeDemoPx, density, fontScale)
+        val layout = measurer.measure(
+            text = "Z",
+            style = TextStyle(
+                color = ZZZ_COLOR,
+                fontSize = fontSizeSp.sp,
+                lineHeight = fontSizeSp.sp,
+                fontWeight = FontWeight.Bold,
+            ),
+        )
+        val baseLeft = headX +
+            PcSleepDemoContract.outwardDirection * z.outwardOffsetDemoPx
+        val baseTop = DEMO_H - z.bottomDemoPx - layout.size.height
+        translate(
+            left = baseLeft + frame.translateXDemoPx,
+            top = baseTop + frame.translateYDemoPx,
+        ) {
+            scale(
+                frame.scale,
+                frame.scale,
+                pivot = Offset(layout.size.width / 2f, layout.size.height / 2f),
+            ) {
+                drawText(
+                    layout,
+                    topLeft = Offset.Zero,
+                    alpha = frame.alpha.coerceIn(0f, 1f),
+                )
+            }
         }
     }
 }

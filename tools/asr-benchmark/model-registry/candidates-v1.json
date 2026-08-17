@@ -1,0 +1,522 @@
+{
+  "schema_version": "1.0",
+  "formal_cohorts": [
+    {
+      "cohort_id": "first_batch_android_v1",
+      "profiles": [
+        "exploration",
+        "production_confirmation"
+      ],
+      "model_ids": [
+        "zipformer_baseline",
+        "paraformer_int8",
+        "fireredasr2_aed_int8",
+        "funasr_nano_onnx_int8"
+      ],
+      "baseline_model_id": "zipformer_baseline"
+    }
+  ],
+  "models": [
+    {
+      "model_id": "zipformer_baseline",
+      "display_name": "Current Zipformer int8 baseline",
+      "role": "baseline",
+      "family": "zipformer_transducer",
+      "official_source": {
+        "publisher": "k2-fsa",
+        "model_url": "https://huggingface.co/k2-fsa/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12/tree/ac54a23c9d106dfbd178be831329fabe261bac58",
+        "revision": "ac54a23c9d106dfbd178be831329fabe261bac58",
+        "revision_kind": "commit"
+      },
+      "licenses": {
+        "upstream_weights": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://www.apache.org/licenses/LICENSE-2.0",
+          "verification_state": "verified",
+          "notice": "Preserve upstream model attribution."
+        },
+        "conversion": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://www.apache.org/licenses/LICENSE-2.0",
+          "verification_state": "not_applicable",
+          "notice": "Registry starts from the publisher's ONNX release."
+        },
+        "runtime": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/blob/master/LICENSE",
+          "verification_state": "verified",
+          "notice": "Preserve sherpa-onnx attribution."
+        },
+        "tokenizer": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://www.apache.org/licenses/LICENSE-2.0",
+          "verification_state": "verified",
+          "notice": "Tokenizer is distributed with the upstream model."
+        },
+        "notice": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://huggingface.co/k2-fsa/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12/blob/ac54a23c9d106dfbd178be831329fabe261bac58/README.md",
+          "verification_state": "not_applicable",
+          "notice": "No separate NOTICE artifact is declared by the frozen publisher release; retain its README and license attribution."
+        }
+      },
+      "estimated_total_resource_bytes": 72470080,
+      "download_status": "already_present_hash_verified",
+      "runtime": {
+        "framework": "sherpa-onnx-1.13.3",
+        "format": "online-transducer-onnx-int8",
+        "supported_abis": [
+          "arm64-v8a"
+        ],
+        "android_runtime_compatibility": "locally_verified",
+        "preprocessor_contract": "sherpa-onnx online transducer feature extraction consumes canonical 16 kHz mono PCM16 without per-model external preprocessing"
+      },
+      "evaluation_policy": {
+        "internal_evaluation_download": {
+          "clearance": "cleared",
+          "user_risk_acceptance": "not_required",
+          "restrictions": [
+            "repository_external_only",
+            "private_device_only",
+            "no_redistribution",
+            "no_upload"
+          ]
+        },
+        "production_distribution": {
+          "clearance": "blocked_pending_separate_review"
+        }
+      },
+      "artifacts": [
+        {
+          "filename": "tokens.txt",
+          "component": "tokenizer",
+          "expected_bytes": 18626,
+          "sha256": "6722bd1585f46f84456b29c3550a343a3cc375b971645773c02ed8e0b4e2405c",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/k2-fsa/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12/blob/ac54a23c9d106dfbd178be831329fabe261bac58/tokens.txt",
+          "source_revision": "ac54a23c9d106dfbd178be831329fabe261bac58",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "encoder.int8.onnx",
+          "component": "weights",
+          "expected_bytes": 70109350,
+          "sha256": "1870fad66d2d7b0d9ea8045859ddd32621d505d363b3242a9de13183809751cb",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/k2-fsa/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12/blob/ac54a23c9d106dfbd178be831329fabe261bac58/encoder-epoch-20-avg-1-chunk-16-left-128.int8.onnx",
+          "source_revision": "ac54a23c9d106dfbd178be831329fabe261bac58",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "decoder.int8.onnx",
+          "component": "weights",
+          "expected_bytes": 1308688,
+          "sha256": "1ec2099d6adfa149c9a2d7ce84bd14d471e277d1a88ef898dc550ff8bec86342",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/k2-fsa/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12/blob/ac54a23c9d106dfbd178be831329fabe261bac58/decoder-epoch-20-avg-1-chunk-16-left-128.int8.onnx",
+          "source_revision": "ac54a23c9d106dfbd178be831329fabe261bac58",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "joiner.int8.onnx",
+          "component": "weights",
+          "expected_bytes": 1033416,
+          "sha256": "7c00afc5450290d0e0df2bda461a20c6891110b9f111291396ed57559db8b4e9",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/k2-fsa/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12/blob/ac54a23c9d106dfbd178be831329fabe261bac58/joiner-epoch-20-avg-1-chunk-16-left-128.int8.onnx",
+          "source_revision": "ac54a23c9d106dfbd178be831329fabe261bac58",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "sherpa-onnx-1.13.3.aar",
+          "component": "runtime",
+          "expected_bytes": 57044841,
+          "sha256": "243ad797a3b6e75ebbeaf7a2ab4aec0777e7d71b730685abb762a120940b07b6",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/csukuangfj2/sherpa-onnx-libs/blob/7a69520894bb9e5bf72ad42d15d0b0a536cbaf8c/android/aar/sherpa-onnx-1.13.3.aar",
+          "source_revision": "7a69520894bb9e5bf72ad42d15d0b0a536cbaf8c",
+          "source_revision_kind": "commit"
+        }
+      ],
+      "provenance": {
+        "upstream_model_id": "k2-fsa/sherpa-onnx-streaming-zipformer-multi-zh-hans-2023-12-12",
+        "checkpoint_byte_equivalence": "verified",
+        "note": "The existing local ONNX files were hashed during the read-only audit."
+      }
+    },
+    {
+      "model_id": "paraformer_int8",
+      "display_name": "Offline Paraformer int8",
+      "role": "first_batch_candidate",
+      "family": "paraformer",
+      "official_source": {
+        "publisher": "csukuangfj sherpa-onnx Paraformer artifact repository",
+        "model_url": "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28/tree/fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94",
+        "artifact_url": "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28/blob/fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94/model.int8.onnx",
+        "revision": "fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94",
+        "revision_kind": "commit"
+      },
+      "licenses": {
+        "upstream_weights": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://modelscope.cn/models/iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+          "verification_state": "verified",
+          "notice": "The pinned upstream ModelScope v2.0.4 metadata declares Apache-2.0."
+        },
+        "conversion": {
+          "spdx_id": "MIT",
+          "url": "https://huggingface.co/csukuangfj/paraformer-onnxruntime-python-example/tree/bbf29cf22ede51f541c052af8f8e77fc54c76e21",
+          "verification_state": "verified",
+          "notice": "The pinned export and quantization repository declares MIT."
+        },
+        "runtime": {
+          "spdx_id": "Apache-2.0 AND MIT",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/tree/v1.13.3",
+          "verification_state": "verified",
+          "notice": "sherpa-onnx 1.13.3 is Apache-2.0; its bundled ONNX Runtime 1.24.3 is MIT and the pinned ThirdPartyNotices ship with the APK."
+        },
+        "tokenizer": {
+          "spdx_id": "MIT",
+          "url": "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28/tree/fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94",
+          "verification_state": "verified",
+          "notice": "The pinned MIT artifact repository ships the exact tokens.txt used with model.int8.onnx."
+        },
+        "notice": {
+          "spdx_id": "LicenseRef-ONNXRuntime-ThirdPartyNotices-1.24.3",
+          "url": "https://github.com/microsoft/onnxruntime/blob/v1.24.3/ThirdPartyNotices.txt",
+          "verification_state": "verified",
+          "notice": "The AAR contains no LICENSE or NOTICE entry, so the pinned ONNX Runtime ThirdPartyNotices are stored and displayed separately in the APK."
+        }
+      },
+      "estimated_total_resource_bytes": 223461591,
+      "download_status": "already_present_hash_verified",
+      "runtime": {
+        "framework": "sherpa-onnx-1.13.3",
+        "format": "offline-paraformer-onnx-int8",
+        "supported_abis": [
+          "arm64-v8a"
+        ],
+        "android_runtime_compatibility": "locally_verified",
+        "preprocessor_contract": "sherpa-onnx offline Paraformer feature extraction consumes canonical 16 kHz mono PCM16 plus the frozen tokens.txt"
+      },
+      "evaluation_policy": {
+        "internal_evaluation_download": {
+          "clearance": "cleared",
+          "user_risk_acceptance": "not_required",
+          "restrictions": [
+            "repository_external_only",
+            "private_device_only",
+            "no_redistribution",
+            "no_upload"
+          ]
+        },
+        "production_distribution": {
+          "clearance": "cleared_by_product_decision"
+        }
+      },
+      "artifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "component": "weights",
+          "expected_bytes": 223385835,
+          "sha256": "9ada9127ca5b82320385ac12340eb8b05dee64fd45cf8cf593ec693826ec2fd7",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28/blob/fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94/model.int8.onnx",
+          "source_revision": "fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "tokens.txt",
+          "component": "tokenizer",
+          "expected_bytes": 75756,
+          "sha256": "59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28/blob/fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94/tokens.txt",
+          "source_revision": "fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "sherpa-onnx-1.13.3.aar",
+          "component": "runtime",
+          "expected_bytes": 57044841,
+          "sha256": "243ad797a3b6e75ebbeaf7a2ab4aec0777e7d71b730685abb762a120940b07b6",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/csukuangfj2/sherpa-onnx-libs/blob/7a69520894bb9e5bf72ad42d15d0b0a536cbaf8c/android/aar/sherpa-onnx-1.13.3.aar",
+          "source_revision": "7a69520894bb9e5bf72ad42d15d0b0a536cbaf8c",
+          "source_revision_kind": "commit"
+        }
+      ],
+      "provenance": {
+        "upstream_model_id": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch@v2.0.4",
+        "checkpoint_byte_equivalence": "not_proven",
+        "note": "The deployed artifact revision and both file hashes are frozen. It has the same upstream model ID as the PC source; byte-level equivalence with the PC v2.0.4 checkpoint has not been proven."
+      }
+    },
+    {
+      "model_id": "fireredasr2_aed_int8",
+      "display_name": "FireRedASR2 AED int8",
+      "role": "first_batch_candidate",
+      "family": "fireredasr2_aed",
+      "official_source": {
+        "publisher": "FireRedTeam and k2-fsa sherpa-onnx",
+        "model_url": "https://k2-fsa.github.io/sherpa/onnx/FireRedAsr/pretrained.html",
+        "artifact_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2",
+        "revision": "asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2",
+        "revision_kind": "release_asset"
+      },
+      "licenses": {
+        "upstream_weights": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://github.com/FireRedTeam/FireRedASR2S/blob/main/LICENSE",
+          "verification_state": "verified",
+          "notice": "Preserve FireRedTeam attribution."
+        },
+        "conversion": {
+          "spdx_id": "UNKNOWN",
+          "url": "https://k2-fsa.github.io/sherpa/onnx/FireRedAsr/pretrained.html",
+          "verification_state": "pending",
+          "notice": "Conversion licensing remains pending."
+        },
+        "runtime": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/blob/master/LICENSE",
+          "verification_state": "verified",
+          "notice": "Preserve sherpa-onnx attribution."
+        },
+        "tokenizer": {
+          "spdx_id": "UNKNOWN",
+          "url": "https://k2-fsa.github.io/sherpa/onnx/FireRedAsr/pretrained.html",
+          "verification_state": "pending",
+          "notice": "Tokenizer license and digest remain pending."
+        },
+        "notice": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://huggingface.co/csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26",
+          "verification_state": "not_applicable",
+          "notice": "No standalone NOTICE file is declared by the official release listing; preserve any NOTICE file if the downloaded archive contains one."
+        }
+      },
+      "estimated_total_resource_bytes": 1234657933,
+      "download_status": "not_downloaded",
+      "runtime": {
+        "framework": "sherpa-onnx-1.13.3",
+        "format": "offline-firered-aed-onnx-int8",
+        "supported_abis": [
+          "arm64-v8a"
+        ],
+        "android_runtime_compatibility": "compile_pending",
+        "preprocessor_contract": "sherpa-onnx FireRed AED frontend consumes canonical 16 kHz mono PCM16 plus the frozen tokens.txt; exact 1.13.3 operator compatibility is unproven"
+      },
+      "evaluation_policy": {
+        "internal_evaluation_download": {
+          "clearance": "requires_user_risk_acceptance",
+          "user_risk_acceptance": "pending",
+          "restrictions": [
+            "repository_external_only",
+            "private_device_only",
+            "no_redistribution",
+            "no_upload"
+          ]
+        },
+        "production_distribution": {
+          "clearance": "blocked_pending_separate_review"
+        }
+      },
+      "artifacts": [
+        {
+          "filename": "encoder.int8.onnx",
+          "component": "weights",
+          "expected_bytes": 817286833,
+          "sha256": null,
+          "verification_state": "post_download_freeze_required",
+          "source_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2",
+          "source_revision": "asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2",
+          "source_revision_kind": "release_asset"
+        },
+        {
+          "filename": "decoder.int8.onnx",
+          "component": "weights",
+          "expected_bytes": 417291928,
+          "sha256": null,
+          "verification_state": "post_download_freeze_required",
+          "source_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2",
+          "source_revision": "asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2",
+          "source_revision_kind": "release_asset"
+        },
+        {
+          "filename": "tokens.txt",
+          "component": "tokenizer",
+          "expected_bytes": 79172,
+          "sha256": null,
+          "verification_state": "post_download_freeze_required",
+          "source_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2",
+          "source_revision": "asr-models/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26.tar.bz2",
+          "source_revision_kind": "release_asset"
+        },
+        {
+          "filename": "sherpa-onnx-1.13.3.aar",
+          "component": "runtime",
+          "expected_bytes": 57044841,
+          "sha256": "243ad797a3b6e75ebbeaf7a2ab4aec0777e7d71b730685abb762a120940b07b6",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/csukuangfj2/sherpa-onnx-libs/blob/7a69520894bb9e5bf72ad42d15d0b0a536cbaf8c/android/aar/sherpa-onnx-1.13.3.aar",
+          "source_revision": "7a69520894bb9e5bf72ad42d15d0b0a536cbaf8c",
+          "source_revision_kind": "commit"
+        }
+      ],
+      "provenance": {
+        "upstream_model_id": "FireRedTeam/FireRedASR2-AED",
+        "checkpoint_byte_equivalence": "not_proven",
+        "note": "Converted int8 artifacts require local byte and license verification after explicit download approval."
+      }
+    },
+    {
+      "model_id": "funasr_nano_onnx_int8",
+      "display_name": "Fun-ASR Nano ONNX int8",
+      "role": "first_batch_candidate",
+      "family": "funasr_nano",
+      "official_source": {
+        "publisher": "FunAudioLLM and k2-fsa sherpa-onnx",
+        "model_url": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/tree/fa5143409ad52755517abd6feccce76a8550228a",
+        "artifact_url": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/blob/fa5143409ad52755517abd6feccce76a8550228a/embedding.int8.onnx",
+        "revision": "fa5143409ad52755517abd6feccce76a8550228a",
+        "revision_kind": "commit"
+      },
+      "licenses": {
+        "upstream_weights": {
+          "spdx_id": "UNKNOWN",
+          "url": "https://www.modelscope.cn/models/zengshuishui/FunASR-nano-onnx/files",
+          "verification_state": "pending",
+          "notice": "The official sherpa release names this exact converted source, but its weight license is not frozen even though the original FunAudioLLM model declares Apache-2.0."
+        },
+        "conversion": {
+          "spdx_id": "UNKNOWN",
+          "url": "https://huggingface.co/Wasser1462/FunASR-nano-onnx",
+          "verification_state": "blocked",
+          "notice": "The exporter named by the official release has no explicit license in the audited repository."
+        },
+        "runtime": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://github.com/k2-fsa/sherpa-onnx/blob/master/LICENSE",
+          "verification_state": "verified",
+          "notice": "Preserve sherpa-onnx attribution."
+        },
+        "tokenizer": {
+          "spdx_id": "UNKNOWN",
+          "url": "https://huggingface.co/Qwen/Qwen3-0.6B",
+          "verification_state": "pending",
+          "notice": "Qwen declares Apache-2.0, but the exact converted tokenizer/lexicon bundle and redistribution notice remain pending."
+        },
+        "notice": {
+          "spdx_id": "Apache-2.0",
+          "url": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/tree/fa5143409ad52755517abd6feccce76a8550228a",
+          "verification_state": "not_applicable",
+          "notice": "No standalone NOTICE file is declared by the frozen conversion release; preserve any NOTICE file if a later frozen artifact contains one."
+        }
+      },
+      "estimated_total_resource_bytes": 1009605061,
+      "download_status": "not_downloaded",
+      "runtime": {
+        "framework": "sherpa-onnx-1.13.3",
+        "format": "offline-funasr-nano-onnx-int8",
+        "supported_abis": [
+          "arm64-v8a"
+        ],
+        "android_runtime_compatibility": "compile_pending",
+        "preprocessor_contract": "sherpa-onnx FunASR Nano frontend consumes canonical 16 kHz mono PCM16 plus tokenizer.json, vocab.json, and merges.txt; exact 1.13.3 operator compatibility is unproven"
+      },
+      "evaluation_policy": {
+        "internal_evaluation_download": {
+          "clearance": "requires_user_risk_acceptance",
+          "user_risk_acceptance": "pending",
+          "restrictions": [
+            "repository_external_only",
+            "private_device_only",
+            "no_redistribution",
+            "no_upload"
+          ]
+        },
+        "production_distribution": {
+          "clearance": "blocked_pending_separate_review"
+        }
+      },
+      "artifacts": [
+        {
+          "filename": "embedding.int8.onnx",
+          "component": "weights",
+          "expected_bytes": 155584380,
+          "sha256": "95e61cd0c9c3b9543339a4cf973c95c116815e745ccc1e0285cbd81f76d18644",
+          "verification_state": "publisher_verified",
+          "source_url": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/blob/fa5143409ad52755517abd6feccce76a8550228a/embedding.int8.onnx",
+          "source_revision": "fa5143409ad52755517abd6feccce76a8550228a",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "encoder_adaptor.int8.onnx",
+          "component": "weights",
+          "expected_bytes": 237792748,
+          "sha256": "f36dea2e30fbc33b5db1d7a7265cc976c5e5586c77b042d5adb1ad27c72db422",
+          "verification_state": "publisher_verified",
+          "source_url": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/blob/fa5143409ad52755517abd6feccce76a8550228a/encoder_adaptor.int8.onnx",
+          "source_revision": "fa5143409ad52755517abd6feccce76a8550228a",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "llm.int8.onnx",
+          "component": "weights",
+          "expected_bytes": 600356593,
+          "sha256": "dfbf9aa3be41bccc257587f151e15c63fbe1b549f2b517f5ccd5bdce3bf4322a",
+          "verification_state": "publisher_verified",
+          "source_url": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/blob/fa5143409ad52755517abd6feccce76a8550228a/llm.int8.onnx",
+          "source_revision": "fa5143409ad52755517abd6feccce76a8550228a",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "tokenizer.json",
+          "component": "tokenizer",
+          "expected_bytes": 11422654,
+          "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+          "verification_state": "publisher_verified",
+          "source_url": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/blob/fa5143409ad52755517abd6feccce76a8550228a/Qwen3-0.6B/tokenizer.json",
+          "source_revision": "fa5143409ad52755517abd6feccce76a8550228a",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "vocab.json",
+          "component": "tokenizer",
+          "expected_bytes": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+          "verification_state": "publisher_verified",
+          "source_url": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/blob/fa5143409ad52755517abd6feccce76a8550228a/Qwen3-0.6B/vocab.json",
+          "source_revision": "fa5143409ad52755517abd6feccce76a8550228a",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "merges.txt",
+          "component": "tokenizer",
+          "expected_bytes": 1671853,
+          "sha256": null,
+          "verification_state": "post_download_freeze_required",
+          "source_url": "https://huggingface.co/csukuangfj/sherpa-onnx-funasr-nano-int8-2025-12-30/blob/fa5143409ad52755517abd6feccce76a8550228a/Qwen3-0.6B/merges.txt",
+          "source_revision": "fa5143409ad52755517abd6feccce76a8550228a",
+          "source_revision_kind": "commit"
+        },
+        {
+          "filename": "sherpa-onnx-1.13.3.aar",
+          "component": "runtime",
+          "expected_bytes": 57044841,
+          "sha256": "243ad797a3b6e75ebbeaf7a2ab4aec0777e7d71b730685abb762a120940b07b6",
+          "verification_state": "locally_verified",
+          "source_url": "https://huggingface.co/csukuangfj2/sherpa-onnx-libs/blob/7a69520894bb9e5bf72ad42d15d0b0a536cbaf8c/android/aar/sherpa-onnx-1.13.3.aar",
+          "source_revision": "7a69520894bb9e5bf72ad42d15d0b0a536cbaf8c",
+          "source_revision_kind": "commit"
+        }
+      ],
+      "provenance": {
+        "upstream_model_id": "zengshuishui/FunASR-nano-onnx",
+        "checkpoint_byte_equivalence": "not_proven",
+        "note": "The release identifies the branded upstream as FunAudioLLM/Fun-ASR-Nano-2512. The ONNX first-batch format is frozen; GGUF is excluded pending separate runtime and accuracy validation. Any publisher hash still requires local post-download verification."
+      }
+    }
+  ]
+}

@@ -83,16 +83,16 @@ class ShuangpinLanguageProvider(val context: Context) : SuggestionProvider {
                 sourceProvider = this,
             )
         }
-        flogDebug { "Shuangpin '$composing' -> '$fullPinyin' -> ${suggestions.size} candidates" }
+        flogDebug { "Shuangpin local candidate count=${suggestions.size}" }
         return suggestions
     }
 
     override suspend fun notifySuggestionAccepted(subtype: Subtype, candidate: SuggestionCandidate) {
-        flogDebug { "accepted: ${candidate.text}" }
+        flogDebug { "Shuangpin candidate accepted" }
     }
 
     override suspend fun notifySuggestionReverted(subtype: Subtype, candidate: SuggestionCandidate) {
-        flogDebug { "reverted: ${candidate.text}" }
+        flogDebug { "Shuangpin candidate reverted" }
     }
 
     override suspend fun removeSuggestion(subtype: Subtype, candidate: SuggestionCandidate): Boolean {

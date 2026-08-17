@@ -22,12 +22,9 @@ object BackendConfig {
 
     /**
      * 润色请求超时。VoiceViewModel 对整个 polish 有 10s 硬预算（POLISH_TIMEOUT_MS），
-     * 后端主通路给 6s，留 ~4s 给 relay 降级兜底。
+     * 后端请求给 6s，剩余时间用于协程收尾并保证原文可靠上屏。
      */
     const val POLISH_TIMEOUT_MS = 6_000L
-
-    /** 后端失败（非额度类）时是否降级回退旧 relay。对齐 Mac BACKEND_CLOUD_FALLBACK_RELAY。 */
-    const val FALLBACK_TO_RELAY = true
 
     /** 微信登录 deep link（系统浏览器授权后回跳）。 */
     const val WECHAT_DEEPLINK_SCHEME = "kittyecho"

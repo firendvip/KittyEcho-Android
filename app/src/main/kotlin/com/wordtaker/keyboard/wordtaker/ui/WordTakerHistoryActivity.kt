@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -43,14 +44,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
+import com.wordtaker.keyboard.wordtaker.history.HistoryDeleteConfirmation
+import com.wordtaker.keyboard.wordtaker.history.HistoryDeleteCopy
 import com.wordtaker.keyboard.wordtaker.history.HistoryEntity
 import com.wordtaker.keyboard.wordtaker.history.HistoryRepository
+import com.wordtaker.keyboard.wordtaker.history.SingleHistoryDeleteGuard
+import com.wordtaker.keyboard.wordtaker.history.historyDeletePreview
+import com.wordtaker.keyboard.wordtaker.history.historyProcessingLabel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.flatMapLatest
@@ -99,7 +106,14 @@ private fun WordTakerHistoryScreen(
     }.collectAsState()
 
     var showClearConfirm by remember { mutableStateOf(false) }
+    val deleteGuard = remember { SingleHistoryDeleteGuard() }
+    var pendingDelete by remember { mutableStateOf<HistoryEntity?>(null) }
     val palette = rememberWeChatPalette()
+
+    BackHandler(enabled = pendingDelete != null) {
+        deleteGuard.dismiss()
+        pendingDelete = null
+    }
 
     Column(
         modifier = Modifier
@@ -171,7 +185,11 @@ private fun WordTakerHistoryScreen(
                             copyToClipboard(context, entry.polished)
                             Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
                         },
-                        onDelete = { scope.launch { repository.remove(entry.id) } },
+                        onDelete = {
+                            if (deleteGuard.request(entry.id)) {
+                                pendingDelete = entry
+                            }
+                        },
                     )
                 }
             }
@@ -186,6 +204,29 @@ private fun WordTakerHistoryScreen(
                 showClearConfirm = false
                 scope.launch { repository.clear() }
                 Toast.makeText(context, "已清空", Toast.LENGTH_SHORT).show()
+            },
+        )
+    }
+
+    pendingDelete?.let { target ->
+        HistoryDeleteConfirmation(
+            target = target,
+            palette = palette,
+            onDismiss = {
+                deleteGuard.dismiss()
+                pendingDelete = null
+            },
+            onConfirm = {
+                deleteGuard.confirm()?.let { targetId ->
+                    pendingDelete = null
+                    scope.launch {
+                        try {
+                            repository.remove(targetId)
+                        } finally {
+                            deleteGuard.complete(targetId)
+                        }
+                    }
+                }
             },
         )
     }
@@ -259,6 +300,10 @@ private fun HistoryCard(
     onCopy: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val deleteDescription = HistoryDeleteCopy.deleteActionDescription(
+        entry.id,
+        historyDeletePreview(entry.polished),
+    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -268,6 +313,15 @@ private fun HistoryCard(
             .padding(start = 16.dp, top = 14.dp, bottom = 14.dp, end = 12.dp),
     ) {
         Column(modifier = Modifier.padding(end = 30.dp)) {
+            historyProcessingLabel(entry)?.let { label ->
+                Text(
+                    text = label,
+                    color = palette.textMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.height(4.dp))
+            }
             // Polished result — prominent, this is what gets copied on tap.
             Text(
                 text = entry.polished,
@@ -293,12 +347,16 @@ private fun HistoryCard(
                 .align(Alignment.TopEnd)
                 .size(28.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .clickable(onClick = onDelete),
+                .clickable(
+                    role = Role.Button,
+                    onClickLabel = deleteDescription,
+                    onClick = onDelete,
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = Icons.Filled.Close,
-                contentDescription = "删除",
+                contentDescription = deleteDescription,
                 tint = palette.textMuted,
                 modifier = Modifier.size(17.dp),
             )

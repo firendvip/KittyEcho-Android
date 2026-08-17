@@ -5,8 +5,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -24,11 +26,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.wordtaker.keyboard.FlorisImeService
 import com.wordtaker.keyboard.R
 import com.wordtaker.keyboard.ime.ImeUiMode
+import com.wordtaker.keyboard.ime.theme.LocalFlorisImeThemeIsNight
 import com.wordtaker.keyboard.keyboardManager
+import com.wordtaker.keyboard.wordtaker.ui.DoubaoImeSkin
 
 /**
  * Minimal WeChat-style toolbar shown above the keyboard. Exactly three controls,
@@ -50,47 +56,52 @@ fun ImeToolbar(modifier: Modifier = Modifier) {
         keyboardManager.activeState.imeUiMode = mode
     }
 
-    Row(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .height(TOOLBAR_HEIGHT_DP.dp)
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .height(TOOLBAR_HEIGHT_DP.dp),
     ) {
-        // Leftmost: settings entry, now shown as OUR cat-head avatar. Opens the in-IME
-        // settings panel in place (no Activity). Tapping again while open returns to
-        // keyboard. (替换为小猫头像，并保留设置功能。)
-        ToolbarCatButton(
-            contentDescription = "设置",
-            onClick = {
-                val current = keyboardManager.activeState.imeUiMode
-                switchTo(if (current == ImeUiMode.SETTINGS) ImeUiMode.TEXT else ImeUiMode.SETTINGS)
-            },
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = toolbarCatHorizontalInsetDp(maxWidth.value).dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Leftmost: settings entry, now shown as OUR cat-head avatar. Opens the in-IME
+            // settings panel in place (no Activity). Tapping again while open returns to
+            // keyboard. (替换为小猫头像，并保留设置功能。)
+            ToolbarCatButton(
+                contentDescription = "设置",
+                onClick = {
+                    val current = keyboardManager.activeState.imeUiMode
+                    switchTo(if (current == ImeUiMode.SETTINGS) ImeUiMode.TEXT else ImeUiMode.SETTINGS)
+                },
+            )
 
-        Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.weight(1f))
 
-        // Voice -> start recording on the unified单界面. The keyboard/cat surface is now
-        // one merged panel (item6), so this no longer switches "屏" — it just asks the
-        // panel to begin a voice recording (cat walks to centre, keys fade out).
-        ToolbarIconButton(
-            iconRes = R.drawable.ic_wt_voice,
-            contentDescription = "语音输入",
-            onClick = {
-                val current = keyboardManager.activeState.imeUiMode
-                if (current != ImeUiMode.TEXT && current != ImeUiMode.CAT_VOICE) {
-                    switchTo(ImeUiMode.TEXT)
-                }
-                com.wordtaker.keyboard.wordtaker.voice.VoiceTrigger.requestStart()
-            },
-        )
-        Spacer(modifier = Modifier.width(BUTTON_GAP_DP.dp))
-        // Collapse -> hide the keyboard window.
-        ToolbarIconButton(
-            iconRes = R.drawable.ic_wt_collapse,
-            contentDescription = "收起键盘",
-            onClick = { FlorisImeService.hideUi() },
-        )
+            // Voice -> start recording on the unified单界面. The keyboard/cat surface is now
+            // one merged panel (item6), so this no longer switches "屏" — it just asks the
+            // panel to begin a voice recording (cat walks to centre, keys fade out).
+            ToolbarIconButton(
+                iconRes = R.drawable.ic_wt_voice,
+                contentDescription = "语音输入",
+                onClick = {
+                    val current = keyboardManager.activeState.imeUiMode
+                    if (current != ImeUiMode.TEXT && current != ImeUiMode.CAT_VOICE) {
+                        switchTo(ImeUiMode.TEXT)
+                    }
+                    com.wordtaker.keyboard.wordtaker.voice.VoiceTrigger.requestStart()
+                },
+            )
+            Spacer(modifier = Modifier.width(BUTTON_GAP_DP.dp))
+            // Collapse -> hide the keyboard window.
+            ToolbarIconButton(
+                iconRes = R.drawable.ic_wt_collapse,
+                contentDescription = "收起键盘",
+                onClick = { FlorisImeService.hideUi() },
+            )
+        }
     }
 }
 
@@ -142,29 +153,57 @@ fun ToolbarCatButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // batch3-A: 去白圈 —— 只留猫头图形 (ic_brand_cat_bare，无白色圆角矩形底)，深浅色同。
-    // 外层 44dp 透明 Box 保证触控目标 ≥44dp；indication=null 避免焦点/水波纹在无底钮上
-    // 显示成灰色方块。猫头直径 ≈ 0.62x38 ≈ 24dp，与原白圈时代的视觉尺寸持平。
+    val dark = LocalFlorisImeThemeIsNight.current
+    val palette = DoubaoImeSkin.palette(dark)
     val noRipple = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
-            .size(WT_TOOLBAR_CAT_TOUCH_SIZE_DP.dp)
+            .size(ToolbarCatAvatarSpec.touchSizeDp.dp)
             .clickable(
                 interactionSource = noRipple,
                 indication = null,
                 onClick = onClick,
-            ),
+            )
+            .semantics { this.contentDescription = contentDescription },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            painter = painterResource(R.drawable.ic_brand_cat_bare),
-            contentDescription = contentDescription,
-            // No tint: keep the cat's own colours.
-            tint = Color.Unspecified,
-            modifier = Modifier.size(WT_TOOLBAR_CAT_GLYPH_SIZE_DP.dp),
-        )
+        Box(
+            modifier = Modifier
+                .size(ToolbarCatAvatarSpec.backgroundSizeDp.dp)
+                .clip(CircleShape)
+                .background(Color(palette.keyArgb)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_brand_cat_bare),
+                contentDescription = null,
+                tint = Color.Unspecified,
+                modifier = Modifier.size(ToolbarCatAvatarSpec.glyphSizeDp.dp),
+            )
+        }
     }
 }
+
+internal object ToolbarCatAvatarSpec {
+    const val touchSizeDp = 44
+    const val backgroundSizeDp = 34
+    const val glyphSizeDp = 30
+}
+
+internal data class ToolbarCatAnchor(
+    val centerXDp: Float,
+    val centerYDp: Float,
+)
+
+internal fun toolbarCatHorizontalInsetDp(widthDp: Float): Int =
+    if (widthDp >= TOOLBAR_WIDE_MIN_WIDTH_DP) 6 else 2
+
+internal fun toolbarCatAnchor(widthDp: Float, slotHeightDp: Float): ToolbarCatAnchor =
+    ToolbarCatAnchor(
+        centerXDp = toolbarCatHorizontalInsetDp(widthDp) +
+            ToolbarCatAvatarSpec.touchSizeDp / 2f,
+        centerYDp = slotHeightDp / 2f,
+    )
 
 internal val WT_TOOLBAR_ICON_TINT = Color(0xFF3C4043)
 // P2-303 深色模式配色：圆底与录音"取消"药丸同档深灰，图标转浅灰（与 TalkPill 前景一致）。
@@ -175,8 +214,5 @@ const val TOOLBAR_HEIGHT_DP = 44
 // item8: 白色圆底"抱紧"图标 —— 圆只比图标大 6dp (26 vs 20)，与顶条圆钮尺寸一致。
 const val WT_TOOLBAR_BUTTON_SIZE_DP = 26
 const val WT_TOOLBAR_ICON_SIZE_DP = 20
-// batch3-A: 小猫头像去白圈 —— 44dp 不可见触控区 + 38dp 无底猫头矢量
-// (头部占视口 ~62%，猫头直径 ≈ 24dp，补偿去圈后的视觉变小)。
-const val WT_TOOLBAR_CAT_TOUCH_SIZE_DP = 44
-const val WT_TOOLBAR_CAT_GLYPH_SIZE_DP = 38
+private const val TOOLBAR_WIDE_MIN_WIDTH_DP = 380f
 private const val BUTTON_GAP_DP = 10

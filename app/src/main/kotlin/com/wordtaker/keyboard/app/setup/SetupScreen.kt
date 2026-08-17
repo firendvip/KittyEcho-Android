@@ -75,7 +75,6 @@ private const val STYLE_T9_PINYIN = "t9_pinyin"
 private const val STYLE_SHUANGPIN = "shuangpin"
 private const val STYLE_WUBI = "wubi"
 private const val STYLE_STROKE = "stroke"
-private const val STYLE_HANDWRITING = "handwriting"
 
 // Brand green used for selection accents in onboarding.
 private val BrandGreen = Color(0xFF07C160)
@@ -155,7 +154,7 @@ private data class KeyboardStyleOption(
     val preview: KeyboardPreviewKind,
 )
 
-private enum class KeyboardPreviewKind { QWERTY, GRID, STROKE, HANDWRITING }
+private enum class KeyboardPreviewKind { QWERTY, GRID, STROKE }
 
 @Composable
 private fun ChooseKeyboardStep(
@@ -216,7 +215,6 @@ private fun ChooseKeyboardStep(
                     "shuangpin" -> STYLE_SHUANGPIN
                     "wubi" -> STYLE_WUBI
                     "stroke" -> STYLE_STROKE
-                    "handwriting" -> STYLE_HANDWRITING
                     else -> STYLE_QWERTY_PINYIN
                 }
                 onNext(style)
@@ -330,7 +328,6 @@ private fun KeyboardMiniPreview(
             KeyboardPreviewKind.QWERTY -> QwertyPreview(keyColor)
             KeyboardPreviewKind.GRID -> GridPreview(keyColor)
             KeyboardPreviewKind.STROKE -> StrokePreview(keyColor)
-            KeyboardPreviewKind.HANDWRITING -> HandwritingPreview(keyColor, dimmed)
         }
     }
 }
@@ -385,36 +382,6 @@ private fun StrokePreview(keyColor: Color) {
                     Text(text = glyph, fontSize = 13.sp, color = Color(0xFF555555))
                 }
             }
-        }
-    }
-}
-
-/** A single "写" glyph inside a writing box — the 手写 (handwriting) pad schematic. */
-@Composable
-private fun HandwritingPreview(keyColor: Color, dimmed: Boolean) {
-    Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(40.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(keyColor)
-                .border(
-                    width = 1.dp,
-                    color = if (dimmed) Color(0xFFDDDDDD) else BrandGreen,
-                    shape = RoundedCornerShape(4.dp),
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "写",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Medium,
-                color = if (dimmed) Color(0xFFAAAAAA) else Color(0xFF333333),
-            )
         }
     }
 }

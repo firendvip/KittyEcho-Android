@@ -20,8 +20,10 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
@@ -30,6 +32,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,7 +40,6 @@ import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationExceptio
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.wordtaker.keyboard.app.FlorisPreferenceStore
 import com.wordtaker.keyboard.ime.nlp.ClipboardSuggestionCandidate
@@ -59,8 +61,28 @@ import com.wordtaker.lib.snygg.ui.SnyggText
 
 val CandidatesRowScrollbarHeight = 2.dp
 
+internal object CandidateSelectionVisualSpec {
+    /**
+     * Theme line box (24dp) + vertical padding (4dp) + vertical margin (2dp).
+     * Keeping this outer height fixed makes the white selection card independent of text length
+     * or additional labels while the outer candidate box remains the full-strip target.
+     */
+    const val outerHeightDp = 30f
+}
+
+internal fun shouldShowCandidateSecondaryText(
+    enabled: Boolean,
+    providerId: String?,
+    hiddenProviderIds: Set<String>,
+): Boolean = enabled && providerId !in hiddenProviderIds
+
 @Composable
-fun CandidatesRow(modifier: Modifier = Modifier) {
+fun CandidatesRow(
+    modifier: Modifier = Modifier,
+    showSecondaryText: Boolean = true,
+    hiddenSecondaryTextProviderIds: Set<String> = emptySet(),
+    candidatesOverride: List<SuggestionCandidate>? = null,
+) {
     val prefs by FlorisPreferenceStore
     val context = LocalContext.current
     val keyboardManager by context.keyboardManager()
@@ -68,7 +90,10 @@ fun CandidatesRow(modifier: Modifier = Modifier) {
     val subtypeManager by context.subtypeManager()
 
     val displayMode by prefs.suggestion.displayMode.collectAsState()
-    val candidates by nlpManager.activeCandidatesFlow.collectAsState()
+    val liveCandidates by nlpManager.activeCandidatesFlow.collectAsState()
+    val touchSnapshot = remember { CandidateTouchSnapshot<List<SuggestionCandidate>>() }
+    val currentCandidates = candidatesOverride ?: liveCandidates
+    val candidates = touchSnapshot.currentOr(currentCandidates)
 
     SnyggRow(
         elementName = FlorisImeUi.SmartbarCandidatesRow.elementName,
@@ -115,23 +140,24 @@ fun CandidatesRow(modifier: Modifier = Modifier) {
                 CandidateItem(
                     modifier = candidateModifier,
                     candidate = candidate,
-                    displayMode = displayMode,
                     isFirst = n == 0,
-                    onClick = {
-                        // Can't use candidate directly. The live list may have been cleared or
-                        // replaced between composition and click dispatch (D-2 race:
-                        // IndexOutOfBoundsException) — re-resolve by index and verify it is still
-                        // the same candidate; otherwise silently ignore the stale tap.
-                        candidates.getOrNull(n)
-                            ?.takeIf { it.text == candidate.text }
-                            ?.let { keyboardManager.commitCandidate(it) }
+                    showSecondaryText = shouldShowCandidateSecondaryText(
+                        enabled = showSecondaryText,
+                        providerId = candidate.sourceProvider?.providerId,
+                        hiddenProviderIds = hiddenSecondaryTextProviderIds,
+                    ),
+                    onTouchStart = {
+                        touchSnapshot.begin(candidates.toList())
                     },
-                    onLongPress = {
-                        // Can't use candidate directly — same stale-tap guard as onClick.
-                        val candidateItem = candidates.getOrNull(n)
-                            ?.takeIf { it.text == candidate.text }
-                        if (candidateItem != null && candidateItem.isEligibleForUserRemoval) {
-                            nlpManager.removeSuggestion(subtypeManager.activeSubtype, candidateItem)
+                    onTouchEnd = { token ->
+                        touchSnapshot.end(token)
+                    },
+                    onClick = { touchedCandidate ->
+                        keyboardManager.commitCandidate(touchedCandidate)
+                    },
+                    onLongPress = { touchedCandidate ->
+                        if (touchedCandidate.isEligibleForUserRemoval) {
+                            nlpManager.removeSuggestion(subtypeManager.activeSubtype, touchedCandidate)
                         } else {
                             false
                         }
@@ -146,86 +172,108 @@ fun CandidatesRow(modifier: Modifier = Modifier) {
 @Composable
 private fun CandidateItem(
     candidate: SuggestionCandidate,
-    displayMode: CandidatesDisplayMode,
     modifier: Modifier = Modifier,
     isFirst: Boolean = false,
-    onClick: () -> Unit = { },
-    onLongPress: () -> Boolean = { false },
+    showSecondaryText: Boolean = true,
+    onTouchStart: () -> Any,
+    onTouchEnd: (Any) -> Unit,
+    onClick: (SuggestionCandidate) -> Unit = { },
+    onLongPress: (SuggestionCandidate) -> Boolean = { false },
     longPressDelay: Long,
-) = with(LocalDensity.current) {
+) {
     var isPressed by remember { mutableStateOf(false) }
+    val latestCandidate by rememberUpdatedState(candidate)
+    val latestOnTouchStart by rememberUpdatedState(onTouchStart)
+    val latestOnTouchEnd by rememberUpdatedState(onTouchEnd)
+    val latestOnClick by rememberUpdatedState(onClick)
+    val latestOnLongPress by rememberUpdatedState(onLongPress)
+    val latestLongPressDelay by rememberUpdatedState(longPressDelay)
 
     val elementName = if (candidate is ClipboardSuggestionCandidate) {
         FlorisImeUi.SmartbarCandidateClip
     } else {
         FlorisImeUi.SmartbarCandidateWord
     }.elementName
-    // WordTaker (P2-2): "first" marks the top-ranked candidate for the WeChat-style green
-    // highlight in the theme. Pure visual attribute — auto-commit behavior is untouched.
+    // "first" marks the top-ranked candidate for the reference-style white/blue selection card.
+    // It is purely visual; auto-commit behavior remains untouched.
     val attributes = mapOf(
         "auto-commit" to if (candidate.isEligibleForAutoCommit) 1 else 0,
         "first" to if (isFirst) 1 else 0,
     )
     val selector = if (isPressed) SnyggSelector.PRESSED else SnyggSelector.NONE
 
-    SnyggRow(
-        elementName = elementName,
-        attributes = attributes,
-        selector = selector,
+    // The outer box owns the stable full-strip hit target. The styled row has a fixed visual
+    // height, so single characters, phrases, and optional secondary labels can only affect width.
+    Box(
         modifier = modifier
             .pointerInput(Unit) {
                 awaitEachGesture {
-                    val down = awaitFirstDown()
-                    isPressed = true
-                    if (down.pressed != down.previousPressed) down.consume()
-                    var upOrCancel: PointerInputChange? = null
+                    var touchToken: Any? = null
                     try {
-                        upOrCancel = withTimeout(longPressDelay) {
-                            waitForUpOrCancellation()
+                        val down = awaitFirstDown()
+                        val touchedCandidate = latestCandidate
+                        touchToken = latestOnTouchStart()
+                        isPressed = true
+                        if (down.pressed != down.previousPressed) down.consume()
+                        var upOrCancel: PointerInputChange? = null
+                        try {
+                            upOrCancel = withTimeout(latestLongPressDelay) {
+                                waitForUpOrCancellation()
+                            }
+                            upOrCancel?.let { if (it.pressed != it.previousPressed) it.consume() }
+                        } catch (_: PointerEventTimeoutCancellationException) {
+                            if (latestOnLongPress(touchedCandidate)) {
+                                upOrCancel = null
+                            }
+                            waitForUpOrCancellation()?.let {
+                                if (it.pressed != it.previousPressed) it.consume()
+                            }
                         }
-                        upOrCancel?.let { if (it.pressed != it.previousPressed) it.consume() }
-                    } catch (_: PointerEventTimeoutCancellationException) {
-                        if (onLongPress()) {
-                            upOrCancel = null
-                            isPressed = false
+                        if (upOrCancel != null) {
+                            latestOnClick(touchedCandidate)
                         }
-                        waitForUpOrCancellation()?.let { if (it.pressed != it.previousPressed) it.consume() }
+                    } finally {
+                        isPressed = false
+                        touchToken?.let(latestOnTouchEnd)
                     }
-                    if (upOrCancel != null) {
-                        onClick()
-                    }
-                    isPressed = false
                 }
             },
-        verticalAlignment = Alignment.CenterVertically,
+        contentAlignment = Alignment.Center,
     ) {
-        if (candidate.icon != null) {
-            SnyggBox(
-                elementName = "$elementName-icon",
-                attributes = attributes,
-                selector = selector,
-            ) {
-                SnyggIcon(imageVector = candidate.icon!!)
-            }
-        }
-        SnyggColumn(
-            modifier = if (displayMode == CandidatesDisplayMode.CLASSIC) Modifier.weight(1f) else Modifier,
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
+        SnyggRow(
+            elementName = elementName,
+            attributes = attributes,
+            selector = selector,
+            modifier = Modifier.height(CandidateSelectionVisualSpec.outerHeightDp.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            SnyggText(
-                elementName = "$elementName-text",
-                attributes = attributes,
-                selector = selector,
-                text = candidate.text.toString(),
-            )
-            if (candidate.secondaryText != null) {
-                SnyggText(
-                    elementName = "$elementName-secondary-text",
+            if (candidate.icon != null) {
+                SnyggBox(
+                    elementName = "$elementName-icon",
                     attributes = attributes,
                     selector = selector,
-                    text = candidate.secondaryText!!.toString(),
+                ) {
+                    SnyggIcon(imageVector = candidate.icon!!)
+                }
+            }
+            SnyggColumn(
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                SnyggText(
+                    elementName = "$elementName-text",
+                    attributes = attributes,
+                    selector = selector,
+                    text = candidate.text.toString(),
                 )
+                if (showSecondaryText && candidate.secondaryText != null) {
+                    SnyggText(
+                        elementName = "$elementName-secondary-text",
+                        attributes = attributes,
+                        selector = selector,
+                        text = candidate.secondaryText!!.toString(),
+                    )
+                }
             }
         }
     }

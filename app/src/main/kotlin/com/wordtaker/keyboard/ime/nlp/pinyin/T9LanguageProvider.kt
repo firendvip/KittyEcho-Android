@@ -160,16 +160,18 @@ class T9LanguageProvider(val context: Context) : SuggestionProvider {
                 sourceProvider = this,
             )
         }
-        flogDebug { "T9 '$composing' -> ${expansions.size} expansions -> ${suggestions.size} candidates" }
+        flogDebug {
+            "T9 expansion count=${expansions.size}, local candidate count=${suggestions.size}"
+        }
         return suggestions
     }
 
     override suspend fun notifySuggestionAccepted(subtype: Subtype, candidate: SuggestionCandidate) {
-        flogDebug { "accepted: ${candidate.text}" }
+        flogDebug { "T9 candidate accepted" }
     }
 
     override suspend fun notifySuggestionReverted(subtype: Subtype, candidate: SuggestionCandidate) {
-        flogDebug { "reverted: ${candidate.text}" }
+        flogDebug { "T9 candidate reverted" }
     }
 
     override suspend fun removeSuggestion(subtype: Subtype, candidate: SuggestionCandidate): Boolean {

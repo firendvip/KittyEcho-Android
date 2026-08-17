@@ -77,6 +77,10 @@ abstract class AbstractEditorInstance(context: Context) {
             _activeInfoFlow.value = v
         }
 
+    /** Monotonic identity for one EditorInfo session; never inferred from editor fields. */
+    var activeInputSessionToken: Long = 0L
+        private set
+
     private val _activeCursorCapsModeFlow = MutableStateFlow(InputAttributes.CapsMode.NONE)
     val activeCursorCapsModeFlow = _activeCursorCapsModeFlow.asStateFlow()
     inline var activeCursorCapsMode: InputAttributes.CapsMode
@@ -101,9 +105,22 @@ abstract class AbstractEditorInstance(context: Context) {
         return runBlocking { expectedContentQueue.peekNewestOrNull() }
     }
 
+    protected fun expectsSelectionUpdate(selection: EditorRange, composing: EditorRange): Boolean {
+        return runBlocking {
+            expectedContentQueue.any { expected ->
+                expected.selection == selection && expected.composing == composing
+            }
+        }
+    }
+
     private fun currentInputConnection() = FlorisImeService.currentInputConnection()
 
     open fun handleStartInput(editorInfo: FlorisEditorInfo) {
+        activeInputSessionToken = if (activeInputSessionToken == Long.MAX_VALUE) {
+            1L
+        } else {
+            activeInputSessionToken + 1L
+        }
         activeInfo = editorInfo
         activeCursorCapsMode = editorInfo.initialCapsMode
         activeContent = EditorContent.Unspecified
@@ -438,6 +455,23 @@ abstract class AbstractEditorInstance(context: Context) {
         return true
     }
 
+    /**
+     * Replaces the active composing region without finalizing it. This is used when an IME
+     * resolves only a prefix of a multi-segment composition and must keep the remainder editable.
+     */
+    open fun replaceComposingText(text: String): Boolean {
+        val ic = currentInputConnection() ?: return false
+        val newContent = activeContent.replacingComposingText(text) ?: return false
+        ic.beginBatchEdit()
+        runBlocking {
+            expectedContentQueue.push(newContent)
+            ic.setComposingText(text, 1)
+            ic.setComposingRegion(newContent.composing)
+        }
+        ic.endBatchEdit()
+        return true
+    }
+
     protected suspend fun deleteAroundCursor(unit: OperationUnit, scope: OperationScope, n: Int = 0): Boolean {
         val ic = currentInputConnection()
         if (ic == null || n < 1) return false
@@ -686,6 +720,10 @@ abstract class AbstractEditorInstance(context: Context) {
             }
         }
 
+        suspend fun any(predicate: (EditorContent) -> Boolean): Boolean {
+            return list.withLock { list -> list.any(predicate) }
+        }
+
         suspend fun clear() {
             list.withLock { list ->
                 list.clear()
@@ -729,4 +767,28 @@ abstract class AbstractEditorInstance(context: Context) {
             }
         }
     }
+}
+
+internal fun EditorContent.replacingComposingText(replacement: String): EditorContent? {
+    if (
+        replacement.isEmpty() ||
+        localComposing.isNotValid ||
+        localSelection.isNotValid ||
+        !localSelection.isCursorMode ||
+        localSelection.start != localComposing.end
+    ) {
+        return null
+    }
+    val composingStart = localComposing.start
+    val composingEnd = localComposing.end
+    if (composingStart !in 0..text.length || composingEnd !in composingStart..text.length) {
+        return null
+    }
+    val newComposingEnd = composingStart + replacement.length
+    return copy(
+        text = text.replaceRange(composingStart, composingEnd, replacement),
+        localSelection = EditorRange.cursor(newComposingEnd),
+        localComposing = EditorRange(composingStart, newComposingEnd),
+        localCurrentWord = EditorRange(composingStart, newComposingEnd),
+    )
 }

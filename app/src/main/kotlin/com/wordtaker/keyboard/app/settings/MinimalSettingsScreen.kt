@@ -70,10 +70,13 @@ import androidx.compose.ui.unit.sp
 import com.wordtaker.keyboard.BuildConfig
 import com.wordtaker.keyboard.R
 import com.wordtaker.keyboard.app.FlorisPreferenceStore
+import com.wordtaker.keyboard.app.LocalNavController
+import com.wordtaker.keyboard.app.Routes
 import com.wordtaker.keyboard.lib.compose.FlorisScreen
 import com.wordtaker.keyboard.lib.util.InputMethodUtils
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.settings.SettingsState
+import com.wordtaker.keyboard.wordtaker.speech.ParaformerModelSettingsSection
 import com.wordtaker.keyboard.wordtaker.ui.AccountScreen
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_QWERTY
 import com.wordtaker.keyboard.wordtaker.ui.KEYBOARD_STYLE_T9
@@ -131,6 +134,7 @@ private fun MinimalSettingsMain(onOpenAccount: () -> Unit) = FlorisScreen {
         val prefs by FlorisPreferenceStore
         val keyboardStyle by prefs.internal.selectedKeyboardStyle.observeAsState()
         val cloudEnabled by prefs.cloudDictionary.cloudEnabled.observeAsState()
+        val keyboardHapticEnabled by prefs.inputFeedback.hapticEnabled.observeAsState()
         val lazyListState = rememberLazyListState()
 
         // item6: 整体配色对齐微信「+」面板 —— 页面浅灰底 + 分组白卡，干净统一。
@@ -200,7 +204,7 @@ private fun MinimalSettingsMain(onOpenAccount: () -> Unit) = FlorisScreen {
 
             item { Spacer(Modifier.height(20.dp)) }
 
-            // Tone + 云词库联想 — grouped in one card (both are typing-behaviour toggles).
+            // 输入反馈与云词库联想集中在同一张行为设置卡片。
             item {
                 SettingsCard(cardBg) {
                     ToggleRow(
@@ -215,15 +219,41 @@ private fun MinimalSettingsMain(onOpenAccount: () -> Unit) = FlorisScreen {
                         )
                     }
                     ToggleRow(
+                        title = "键盘震动反馈",
+                        checked = keyboardHapticEnabled,
+                        onCheckedChange = {
+                            scope.launch { prefs.inputFeedback.hapticEnabled.set(it) }
+                        },
+                    )
+                    ToggleRow(
                         title = "云词库联想",
                         subtitle = "打拼音时联网补充更多候选词，只上传拼音，不上传输入内容",
                         checked = cloudEnabled,
                         onCheckedChange = { scope.launch { prefs.cloudDictionary.cloudEnabled.set(it) } },
                     )
+                    ToggleRow(
+                        title = "仅本地处理（关闭云端润色）",
+                        subtitle = "开启后，识别正文不会发送到服务端",
+                        checked = state.localRecognitionOnly,
+                        onCheckedChange = {
+                            scope.launch { repo.setLocalRecognitionOnly(it) }
+                        },
+                    )
                 }
             }
 
             // #17 极简模式 hidden / #18 皮肤 hidden — minimal stays default false underneath.
+
+            item { Spacer(Modifier.height(20.dp)) }
+
+            item {
+                SectionLabel("语音识别")
+                SettingsCard(cardBg) {
+                    ParaformerModelSettingsSection(
+                        manager = AppGraph.paraformerModelManager,
+                    )
+                }
+            }
 
             item { Spacer(Modifier.height(20.dp)) }
 
@@ -298,6 +328,7 @@ private fun BrandHeader() {
 
 @Composable
 private fun AboutSection() {
+    val navController = LocalNavController.current
     SectionLabel("关于")
 
     Spacer(Modifier.height(16.dp))
@@ -319,8 +350,21 @@ private fun AboutSection() {
 
     // 数据安全: two lines per spec (#19).
     AboutBlockTitle("数据安全")
-    AboutLine("🔒 本地：转写文本只保存在本机，不存服务器、不用于训练。语音识别全程离线。")
+    AboutLine("🔒 识别：语音识别全程在本地完成。")
+    AboutLine("☁️ 润色：云端润色开启时，识别正文会发送到服务端处理。")
+    AboutLine("🛡 隐私：密码等敏感字段永不发送到云端，也不会写入历史记录。")
     AboutLine("🗑 删除：历史记录可随时删除，即从本机彻底移除。")
+
+    Text(
+        text = "语音模型与许可证  ›",
+        fontSize = 14.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { navController.navigate(Routes.Settings.VoiceModelLicenses) }
+            .padding(vertical = 12.dp),
+    )
 
     // item1: 版本行 —— 全动态取值 (versionName / versionCode / git 短 sha)，弱化样式
     // (小字灰色居中)，永不硬编码版本字面量。

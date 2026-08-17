@@ -1,0 +1,30 @@
+Paraformer artifact license metadata
+
+Artifact: csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28@fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94
+Conversion source: csukuangfj/paraformer-onnxruntime-python-example@bbf29cf22ede51f541c052af8f8e77fc54c76e21
+Declared license in both pinned source metadata records: MIT
+
+The pinned sources do not publish a standalone copyright notice.
+No copyright owner is inferred or added here. The following MIT permission
+text is included to preserve the declared license terms without inventing an
+unsupported attribution.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

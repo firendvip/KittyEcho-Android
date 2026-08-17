@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/reference-set-v1.json",
+  "title": "KittyEcho private ASR reference set v1",
+  "description": "Private local-only input. It must never be supplied to a decoder or committed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "dataset_id",
+    "references"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "dataset_id": {
+      "type": "string",
+      "pattern": "^dataset_[0-9a-f]{12}$"
+    },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "clip_id",
+          "text",
+          "annotations"
+        ],
+        "properties": {
+          "clip_id": {
+            "type": "string",
+            "pattern": "^clip_[0-9a-f]{12}$"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 100000
+          },
+          "annotations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "annotation_id",
+                "kind",
+                "text",
+                "occurrence_index"
+              ],
+              "properties": {
+                "annotation_id": {
+                  "type": "string",
+                  "pattern": "^ann_[0-9a-f]{12}$"
+                },
+                "kind": {
+                  "enum": [
+                    "number",
+                    "proper_name"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "occurrence_index": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

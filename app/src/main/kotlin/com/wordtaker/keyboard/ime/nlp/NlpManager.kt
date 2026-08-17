@@ -17,7 +17,6 @@
 package com.wordtaker.keyboard.ime.nlp
 
 import android.content.Context
-import android.os.SystemClock
 import android.util.LruCache
 import com.wordtaker.keyboard.app.FlorisPreferenceStore
 import com.wordtaker.keyboard.clipboardManager
@@ -27,15 +26,20 @@ import com.wordtaker.keyboard.ime.clipboard.provider.ItemType
 import com.wordtaker.keyboard.ime.core.Subtype
 import com.wordtaker.keyboard.ime.editor.EditorContent
 import com.wordtaker.keyboard.ime.editor.EditorRange
+import com.wordtaker.keyboard.ime.editor.InputAttributes
 import com.wordtaker.keyboard.ime.media.emoji.EmojiSuggestionProvider
 import com.wordtaker.keyboard.ime.nlp.han.HanShapeBasedLanguageProvider
 import com.wordtaker.keyboard.ime.nlp.handwriting.HandwritingLanguageProvider
 import com.wordtaker.keyboard.ime.nlp.latin.LatinLanguageProvider
 import com.wordtaker.keyboard.ime.nlp.pinyin.CloudDictRequest
+import com.wordtaker.keyboard.ime.nlp.pinyin.CloudDictionaryEnvironment
 import com.wordtaker.keyboard.ime.nlp.pinyin.CloudDictionaryAugmenter
+import com.wordtaker.keyboard.ime.nlp.pinyin.CloudEditorType
 import com.wordtaker.keyboard.ime.nlp.pinyin.PinyinLanguageProvider
 import com.wordtaker.keyboard.ime.nlp.pinyin.ShuangpinLanguageProvider
 import com.wordtaker.keyboard.ime.nlp.pinyin.T9LanguageProvider
+import com.wordtaker.keyboard.ime.nlp.pinyin.activePinyinCompositionSession
+import com.wordtaker.keyboard.ime.nlp.pinyin.normalizeFullPinyin
 import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.lib.util.NetworkUtils
 import com.wordtaker.keyboard.subtypeManager
@@ -48,8 +52,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import com.wordtaker.lib.kotlin.guardedByLock
 import com.wordtaker.lib.kotlin.collectLatestIn
 import java.util.concurrent.atomic.AtomicBoolean
@@ -90,21 +92,28 @@ class NlpManager(context: Context) {
     // lock unnecessary because values constant
     private val providersForceSuggestionOn = mutableMapOf<String, Boolean>()
 
-    private val internalSuggestionsGuard = Mutex()
-    private var internalSuggestions by Delegates.observable(SystemClock.uptimeMillis() to listOf<SuggestionCandidate>()) { _, _, _ ->
+    private var internalSuggestions by Delegates.observable(0L to listOf<SuggestionCandidate>()) { _, _, _ ->
         scope.launch { assembleCandidates() }
+    }
+    private val suggestionRequestGate: SuggestionRequestGate by lazy {
+        SuggestionRequestGate {
+            cloudDictAugmenter.invalidate()
+        }
     }
 
     // 云词库联想增强层（见 CloudDictionaryAugmenter 类注释：composing 候选补充，非滑行几何语料）。
-    // reqTime 精确匹配才回填，保证过期(已被更新 composing 覆盖)的云响应不会覆盖更新的候选。
+    // requestId 精确匹配才回填，保证过期（已被更新 composing 覆盖）的云响应不会覆盖更新的候选。
     private val cloudDictAugmenter = CloudDictionaryAugmenter(
         scope = scope,
         suggest = { pinyin, limit -> AppGraph.backendClient.dictSuggest(pinyin = pinyin, limit = limit) },
-        isEnabled = { prefs.cloudDictionary.cloudEnabled.get() },
-        onMerged = { reqTime, merged ->
-            internalSuggestionsGuard.withLock {
-                if (internalSuggestions.first == reqTime) {
-                    internalSuggestions = reqTime to merged
+        isAllowed = ::isCloudDictRequestAllowed,
+        onMerged = { request, merged ->
+            suggestionRequestGate.runIfLatest(request.requestId) {
+                if (
+                    internalSuggestions.first == request.requestId &&
+                    isCloudDictRequestAllowed(request)
+                ) {
+                    internalSuggestions = request.requestId to merged
                 }
             }
         },
@@ -134,7 +143,17 @@ class NlpManager(context: Context) {
         prefs.emoji.suggestionEnabled.asFlow().collectLatestIn(scope) {
             assembleCandidates()
         }
+        prefs.cloudDictionary.cloudEnabled.asFlow().collectLatestIn(scope) {
+            cloudDictAugmenter.invalidate()
+        }
+        keyboardManager.activeState.collectLatestIn(scope) {
+            cloudDictAugmenter.invalidate()
+        }
+        editorInstance.activeInfoFlow.collectLatestIn(scope) {
+            cloudDictAugmenter.invalidate()
+        }
         subtypeManager.activeSubtypeFlow.collectLatestIn(scope) { subtype ->
+            cloudDictAugmenter.invalidate()
             preload(subtype)
         }
     }
@@ -228,7 +247,13 @@ class NlpManager(context: Context) {
             || providerForcesSuggestionOn(subtypeManager.activeSubtype)
 
     fun suggest(subtype: Subtype, content: EditorContent) {
-        val reqTime = SystemClock.uptimeMillis()
+        if (
+            subtype.nlpProviders.suggestion != PinyinLanguageProvider.ProviderId ||
+            content.composingText.isEmpty()
+        ) {
+            activePinyinCompositionSession.clear()
+        }
+        val requestId = suggestionRequestGate.beginRequest()
         scope.launch {
             val emojiSuggestions = when {
                 prefs.emoji.suggestionEnabled.get() -> {
@@ -260,12 +285,10 @@ class NlpManager(context: Context) {
                 addAll(emojiSuggestions)
                 addAll(suggestions)
             }
-            internalSuggestionsGuard.withLock {
-                if (internalSuggestions.first < reqTime) {
-                    internalSuggestions = reqTime to merged
-                }
+            suggestionRequestGate.runIfLatest(requestId) {
+                internalSuggestions = requestId to merged
+                requestCloudDictAugmentIfApplicable(subtype, content, requestId, merged)
             }
-            requestCloudDictAugmentIfApplicable(subtype, content, reqTime, merged)
         }
     }
 
@@ -278,28 +301,74 @@ class NlpManager(context: Context) {
     private fun requestCloudDictAugmentIfApplicable(
         subtype: Subtype,
         content: EditorContent,
-        reqTime: Long,
+        requestId: Long,
         localCandidates: List<SuggestionCandidate>,
     ) {
         if (subtype.nlpProviders.suggestion != PinyinLanguageProvider.ProviderId) return
-        if (keyboardManager.activeState.isIncognitoMode) return
-        val pinyin = content.composingText.lowercase().filter { it in 'a'..'z' }
-        if (pinyin.isEmpty()) return
-        cloudDictAugmenter.request(CloudDictRequest(reqTime, pinyin, localCandidates))
+        val pinyinComposing = activePinyinCompositionSession
+            .remainingRawFor(content.composingText)
+            ?: content.composingText
+        val pinyin = normalizeFullPinyin(pinyinComposing)?.cloud ?: return
+        val request = CloudDictRequest(requestId, pinyin, localCandidates.toList())
+        if (!cloudDictionaryEnvironment(subtype.nlpProviders.suggestion, pinyinComposing).allows(pinyin)) return
+        cloudDictAugmenter.request(request)
+    }
+
+    private fun isCloudDictRequestAllowed(request: CloudDictRequest): Boolean {
+        val currentComposing = editorInstance.activeContent.composingText
+        val pinyinComposing = activePinyinCompositionSession
+            .remainingRawFor(currentComposing)
+            ?: currentComposing
+        return cloudDictionaryEnvironment(
+            providerId = subtypeManager.activeSubtype.nlpProviders.suggestion,
+            composingText = pinyinComposing,
+        ).allows(request.pinyin)
+    }
+
+    private fun cloudDictionaryEnvironment(
+        providerId: String?,
+        composingText: CharSequence,
+    ): CloudDictionaryEnvironment {
+        val editorInfo = editorInstance.activeInfo
+        val editorType = when (editorInfo.inputAttributes.variation) {
+            InputAttributes.Variation.PASSWORD -> CloudEditorType.PASSWORD
+            InputAttributes.Variation.VISIBLE_PASSWORD -> CloudEditorType.VISIBLE_PASSWORD
+            InputAttributes.Variation.WEB_PASSWORD -> CloudEditorType.WEB_PASSWORD
+            else -> CloudEditorType.NORMAL
+        }
+        val hasValidatedInternet = runCatching {
+            AppGraph.internetConnection.isAvailable()
+        }.getOrDefault(false)
+        return CloudDictionaryEnvironment(
+            activeSuggestionProviderId = providerId,
+            composingText = composingText,
+            cloudEnabled = prefs.cloudDictionary.cloudEnabled.get(),
+            hasValidatedInternet = hasValidatedInternet,
+            isIncognito = keyboardManager.activeState.isIncognitoMode,
+            editorType = editorType,
+            noPersonalizedLearning = editorInfo.imeOptions.flagNoPersonalizedLearning,
+            isEnglishMode = keyboardManager.activeState.isEnglishMode,
+        )
     }
 
     fun suggestDirectly(suggestions: List<SuggestionCandidate>) {
-        val reqTime = SystemClock.uptimeMillis()
-        runBlocking {
-            internalSuggestions = reqTime to suggestions
+        val requestId = suggestionRequestGate.beginRequest()
+        suggestionRequestGate.runIfLatest(requestId) {
+            internalSuggestions = requestId to suggestions
         }
     }
 
     fun clearSuggestions() {
-        val reqTime = SystemClock.uptimeMillis()
-        runBlocking {
-            internalSuggestions = reqTime to emptyList()
+        activePinyinCompositionSession.clear()
+        val requestId = suggestionRequestGate.beginRequest()
+        suggestionRequestGate.runIfLatest(requestId) {
+            internalSuggestions = requestId to emptyList()
         }
+    }
+
+    fun resetPinyinCompositionSession() {
+        activePinyinCompositionSession.clear()
+        cloudDictAugmenter.invalidate()
     }
 
     fun getAutoCommitCandidate(): SuggestionCandidate? {
@@ -345,7 +414,7 @@ class NlpManager(context: Context) {
                     isPrivateSession = keyboardManager.activeState.isIncognitoMode,
                 ).ifEmpty {
                     buildList {
-                        internalSuggestionsGuard.withLock {
+                        suggestionRequestGate.withLock {
                             addAll(internalSuggestions.second)
                         }
                     }

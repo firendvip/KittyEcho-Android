@@ -69,6 +69,7 @@ import com.wordtaker.keyboard.ime.core.SubtypeJsonConfig
 import com.wordtaker.keyboard.ime.core.SubtypeLayoutMap
 import com.wordtaker.keyboard.ime.core.SubtypeNlpProviderMap
 import com.wordtaker.keyboard.ime.core.SubtypePreset
+import com.wordtaker.keyboard.ime.core.isProductSelectableCharacterLayout
 import com.wordtaker.keyboard.ime.keyboard.LayoutArrangementComponent
 import com.wordtaker.keyboard.ime.keyboard.LayoutType
 import com.wordtaker.keyboard.ime.keyboard.extCorePopupMapping
@@ -553,8 +554,17 @@ private fun SubtypeLayoutDropdown(
     onLayoutMapChanged: (SubtypeLayoutMap) -> Unit,
     selectListValues: List<String>,
 ) {
-    val layoutIds = remember(layouts) { SelectListKeys + layouts.keys.toList() }
-    val layoutLabels = remember(layouts) { selectListValues + layouts.values.map { it.label } }
+    val selectableLayouts = remember(layoutType, layouts) {
+        if (layoutType == LayoutType.CHARACTERS) {
+            layouts.filterKeys { isProductSelectableCharacterLayout(it.componentId) }
+        } else {
+            layouts
+        }
+    }
+    val layoutIds = remember(selectableLayouts) { SelectListKeys + selectableLayouts.keys.toList() }
+    val layoutLabels = remember(selectableLayouts) {
+        selectListValues + selectableLayouts.values.map { it.label }
+    }
     val layoutId = remember(layoutMap) { layoutMap[layoutType] }
     val expanded = remember { mutableStateOf(false) }
     val selectedIndex = layoutIds.indexOf(layoutId).coerceAtLeast(0)

@@ -2,7 +2,7 @@
   "$": "ime.extension.theme",
   "meta": {
     "id": "org.florisboard.themes.my",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "title": "FlorisBoard default themes (Material You)",
     "description": "Default Material You themes (both day and night) for the keyboard UI",
     "maintainers": [ "patrickgold <patrick@patrickgold.dev>", "lm41 <lm41@lm41.xyz>" ],

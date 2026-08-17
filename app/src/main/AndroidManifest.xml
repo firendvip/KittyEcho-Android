@@ -8,8 +8,13 @@
     <!-- Permission needed to create notifications on devices running Android 13+ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
+    <!-- Paraformer runtime model download is a user-initiated long-running data transfer. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+
     <!-- WordTaker: relay polish (network) and on-device voice capture -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 
     <!-- Android 11+ only: Define that WordTaker requests to see all apps that
@@ -53,6 +58,11 @@
             </intent-filter>
             <meta-data android:name="android.view.im" android:resource="@xml/method"/>
         </service>
+
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <!-- Spellchecker service -->
         <service

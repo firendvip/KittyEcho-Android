@@ -1,0 +1,8 @@
+{
+  "profile_id": "zh-normalization-v1",
+  "unicode_form": "NFKC",
+  "whitespace": "remove",
+  "punctuation": "remove",
+  "latin_case": "lower",
+  "numbers": "unicode_decimal_to_ascii"
+}

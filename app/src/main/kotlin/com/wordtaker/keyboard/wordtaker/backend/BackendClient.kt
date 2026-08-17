@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
  * backendClient.js 重写，接口/字段/错误分类 1:1 对齐。
  *
  * 自动注入请求头：x-device-id、x-platform: android、登录后 Authorization: Bearer。
- * 所有方法为阻塞调用（对齐 RelayClient 风格），调用方在 Dispatchers.IO 包裹。
+ * 所有方法为阻塞调用，调用方在 Dispatchers.IO 包裹。
  * 失败统一抛 [BackendException]（kind = NETWORK / TIMEOUT / HTTP + 业务 code）。
  */
 class BackendClient(
@@ -23,7 +23,7 @@ class BackendClient(
     private val tokenProvider: () -> String?,
     baseUrl: String = BackendConfig.BASE_URL + BackendConfig.API_PREFIX,
     client: OkHttpClient? = null,
-) {
+) : AccountApi {
 
     private val baseUrl = baseUrl.trimEnd('/')
 
@@ -57,7 +57,7 @@ class BackendClient(
     }
 
     /** 云端额度查询（匿名可用）。GET /quota。 */
-    fun getQuota(): QuotaInfo {
+    override fun getQuota(): QuotaInfo {
         val data = request("/quota", "GET").dataObject()
         val breakdown = data.optJSONObject("breakdown")
         return QuotaInfo(
@@ -71,42 +71,42 @@ class BackendClient(
         )
     }
 
-    /**
-     * 拉取本地模型系统提示词（Mac 契约保留位；Android 暂无本地 LLM，实现留作对齐）。
-     * GET /prompt?mode=...，短超时，失败由调用方静默降级。
-     */
-    fun getLocalPrompt(mode: String): JSONObject? =
-        request("/prompt?mode=${urlEncode(mode)}", "GET", timeoutMs = PROMPT_TIMEOUT_MS)
-            ?.optJSONObject("data")
-
     // —— 云词库联想 ——
 
     /**
-     * 云词库联想候选。POST /dict/suggest {pinyin, limit, prefix, context}。
+     * 云词库联想候选。POST /dict/suggest {pinyin, limit, prefix:false}。
      * 匿名可用、免费不计费；失败/超时/异常一律静默降级为空列表（调用方按纯本地候选处理）。
-     * 只发拼音编码（+可选前一词 context），绝不发正文；调用方需在 incognito/密码场景处不发起调用。
+     * 请求体不接受上下文参数，只能发送经过调用方全拼规则合法化的纯 ASCII 拼音。
      */
     fun dictSuggest(
         pinyin: String,
         limit: Int = 10,
-        prefix: Boolean = false,
-        context: String = "",
     ): List<DictCandidate> {
+        if (!DICT_PINYIN.matches(pinyin) || limit !in 1..MAX_DICT_SUGGEST_LIMIT) return emptyList()
         return try {
-            val body = JSONObject().put("pinyin", pinyin).put("limit", limit).put("prefix", prefix)
-            if (context.isNotBlank()) body.put("context", context)
+            val body = JSONObject()
+                .put("pinyin", pinyin)
+                .put("limit", limit)
+                .put("prefix", false)
             val json = request("/dict/suggest", "POST", body, DICT_SUGGEST_TIMEOUT_MS)
-            // 尊重统一 envelope 的 success：HTTP 200 但 success=false（即使带 data.candidates）
-            // 也视为失败，返回空 → 静默降级为纯本地候选。缺省无 success 字段时按成功处理。
-            if (json?.optBoolean("success", true) == false) return emptyList()
+            // API envelope 边界严格 fail closed：success 必须是布尔 true。
+            if (json?.opt("success") != true) return emptyList()
             val arr = json.dataObject().optJSONArray("candidates") ?: return emptyList()
             (0 until arr.length()).mapNotNull { i ->
                 val o = arr.optJSONObject(i) ?: return@mapNotNull null
-                val text = o.optString("text").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val text = (o.opt("text") as? String)
+                    ?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                val rawScore = o.opt("score")
+                val score = when (rawScore) {
+                    null, JSONObject.NULL -> 0.0
+                    is Number -> rawScore.toDouble()
+                    else -> return@mapNotNull null
+                }
                 DictCandidate(
                     text = text,
-                    score = o.optDouble("score", 0.0),
-                    source = o.optString("source").takeIf { it.isNotBlank() },
+                    score = score,
+                    source = (o.opt("source") as? String)?.takeIf { it.isNotBlank() },
                 )
             }
         } catch (e: Exception) {
@@ -117,7 +117,7 @@ class BackendClient(
     // —— 会员 / 计费（套餐 / 下单 / dev 直付 / 兑换码）——
 
     /** 套餐列表（公开）。GET /payment/plans。 */
-    fun listPlans(): List<PlanInfo> {
+    override fun listPlans(): List<PlanInfo> {
         val arr = request("/payment/plans", "GET")?.optJSONArray("data") ?: return emptyList()
         return (0 until arr.length()).mapNotNull { i ->
             val o = arr.optJSONObject(i) ?: return@mapNotNull null
@@ -133,7 +133,7 @@ class BackendClient(
     }
 
     /** 下单（Bearer）。POST /payment/order {planCode, channel}。 */
-    fun createOrder(planCode: String, channel: String): OrderInfo {
+    override fun createOrder(planCode: String, channel: String): OrderInfo {
         val data = request(
             "/payment/order", "POST",
             JSONObject().put("planCode", planCode).put("channel", channel),
@@ -153,7 +153,7 @@ class BackendClient(
         request("/payment/mock/pay", "POST", JSONObject().put("orderId", orderId)).dataObject()
 
     /** 兑换码（Bearer）。POST /redeem {code}。错误 code=INVALID_CODE/CODE_USED/CODE_EXPIRED。 */
-    fun redeem(code: String): RedeemOutcome {
+    override fun redeem(code: String): RedeemOutcome {
         val data = request("/redeem", "POST", JSONObject().put("code", code)).dataObject()
         return RedeemOutcome(
             charAmount = data.optLongOrNull("charAmount"),
@@ -163,11 +163,11 @@ class BackendClient(
 
     // —— 登录 ——
 
-    fun authSmsSend(phone: String) {
+    override fun authSmsSend(phone: String) {
         request("/auth/sms/send", "POST", JSONObject().put("phone", phone))
     }
 
-    fun authSmsLogin(phone: String, code: String, inviteCode: String? = null): LoginResult =
+    override fun authSmsLogin(phone: String, code: String, inviteCode: String?): LoginResult =
         parseLogin(
             request(
                 "/auth/sms/login", "POST",
@@ -175,11 +175,11 @@ class BackendClient(
             ),
         )
 
-    fun authEmailSend(email: String) {
+    override fun authEmailSend(email: String) {
         request("/auth/email/send", "POST", JSONObject().put("email", email))
     }
 
-    fun authEmailLogin(email: String, code: String, inviteCode: String? = null): LoginResult =
+    override fun authEmailLogin(email: String, code: String, inviteCode: String?): LoginResult =
         parseLogin(
             request(
                 "/auth/email/login", "POST",
@@ -188,7 +188,7 @@ class BackendClient(
         )
 
     /** 微信登录第一步：取官方授权 URL（含 redirect_uri + state）。GET /auth/wechat/url。 */
-    fun getWechatAuthUrl(): WechatAuthUrl {
+    override fun getWechatAuthUrl(): WechatAuthUrl {
         val data = request("/auth/wechat/url", "GET").dataObject()
         return WechatAuthUrl(
             url = data.optString("url"),
@@ -197,7 +197,7 @@ class BackendClient(
     }
 
     /** 微信登录第二步：回传官方回调 code 换取 JWT。POST /auth/wechat/callback。 */
-    fun authWechatLogin(code: String, inviteCode: String? = null): LoginResult =
+    override fun authWechatLogin(code: String, inviteCode: String?): LoginResult =
         parseLogin(
             request(
                 "/auth/wechat/callback", "POST",
@@ -206,7 +206,7 @@ class BackendClient(
         )
 
     /** 当前账号信息（Bearer）。GET /auth/me → data { account, cloudRemaining, subscription }。 */
-    fun authMe(): JSONObject = request("/auth/me", "GET").dataObject()
+    override fun authMe(): JSONObject = request("/auth/me", "GET").dataObject()
 
     // —— 内部：统一请求 / 组装 ——
 
@@ -290,13 +290,11 @@ class BackendClient(
 
     private fun JSONObject?.dataObject(): JSONObject = this?.optJSONObject("data") ?: JSONObject()
 
-    private fun urlEncode(value: String): String =
-        java.net.URLEncoder.encode(value, "UTF-8")
-
     private companion object {
         const val CONNECT_TIMEOUT_SECONDS = 10L
-        const val PROMPT_TIMEOUT_MS = 4_000L
         const val DICT_SUGGEST_TIMEOUT_MS = 500L
+        const val MAX_DICT_SUGGEST_LIMIT = 10
+        val DICT_PINYIN = Regex("^[a-z]+$")
         val JSON = "application/json; charset=utf-8".toMediaType()
     }
 }

@@ -67,10 +67,14 @@ class SubtypeManager(context: Context) {
     init {
         prefs.localization.subtypes.asFlow().collectLatestIn(scope) { listRaw ->
             flogDebug { listRaw }
-            val list = if (listRaw.isNotBlank()) {
+            val decodedList = if (listRaw.isNotBlank()) {
                 SubtypeJsonConfig.decodeFromString<List<Subtype>>(listRaw)
             } else {
                 emptyList()
+            }
+            val list = migratePersistedProductSubtypes(decodedList)
+            if (list != decodedList) {
+                prefs.localization.subtypes.set(SubtypeJsonConfig.encodeToString(list))
             }
             subtypes = list
             evaluateActiveSubtype(list)
@@ -106,11 +110,29 @@ class SubtypeManager(context: Context) {
         //  2. Re-evaluate the active subtype so the change takes effect immediately, including
         //     the empty-list fallback path (which is style-aware in evaluateActiveSubtype). This
         //     is what makes the choice drive the keyboard even before the seed has persisted.
-        prefs.internal.selectedKeyboardStyle.asFlow().collectLatestIn(scope) {
+        prefs.internal.selectedKeyboardStyle.asFlow().collectLatestIn(scope) { stored ->
+            val normalized = normalizePersistedProductKeyboardStyle(stored)
+            if (normalized != stored) {
+                prefs.internal.selectedKeyboardStyle.set(normalized)
+                return@collectLatestIn
+            }
             reconcileSeededSubtype()
             evaluateActiveSubtype(subtypes)
         }
         subtypesFlow.collectLatestIn(scope) { reconcileSeededSubtype() }
+    }
+
+    /**
+     * Reads and persists the product-safe style. The write only happens for the one retired
+     * handwriting value, so the migration is idempotent and leaves T9/other valid styles intact.
+     */
+    private suspend fun readNormalizedProductKeyboardStyle(): String {
+        val stored = prefs.internal.selectedKeyboardStyle.get()
+        val normalized = normalizePersistedProductKeyboardStyle(stored)
+        if (normalized != stored) {
+            prefs.internal.selectedKeyboardStyle.set(normalized)
+        }
+        return normalized
     }
 
     /**
@@ -123,7 +145,7 @@ class SubtypeManager(context: Context) {
         if (current.size != 2) return
         val chinese = current.find { it.primaryLocale.language == "zh" } ?: return
         val other = current.find { it.id != chinese.id } ?: return
-        val desired = Subtype.pinyinDefaultFor(prefs.internal.selectedKeyboardStyle.get())
+        val desired = Subtype.pinyinDefaultFor(readNormalizedProductKeyboardStyle())
         if (desired.equalsExcludingId(chinese)) return
         val replacement = desired.copy(id = chinese.id)
         persistNewSubtypeList(listOf(replacement, other))
@@ -154,12 +176,12 @@ class SubtypeManager(context: Context) {
                 return@launch
             }
             val now = System.currentTimeMillis()
-            // Honor the keyboard style chosen during onboarding. All six styles map to a
+            // Honor the keyboard style chosen during onboarding. Each product style maps to a
             // distinct subtype via [Subtype.pinyinDefaultFor]. Note: when the host app seeds
             // before onboarding has written the chosen style, this reads the default; the
             // post-seed [reconcileStyleWithSeededSubtype] collector corrects the seeded subtype
             // once the real style is persisted.
-            val style = prefs.internal.selectedKeyboardStyle.get()
+            val style = readNormalizedProductKeyboardStyle()
             val pinyinSubtype = Subtype.pinyinDefaultFor(style).copy(id = now)
             val englishSubtype = Subtype.DEFAULT.copy(id = now + 1)
             val seeded = listOf(pinyinSubtype, englishSubtype)
@@ -189,9 +211,9 @@ class SubtypeManager(context: Context) {
         // would let it win over the real seeded pinyin subtype.
         if (list.isEmpty()) {
             // Honor the onboarding-selected style even before the seeded list has persisted, so
-            // choosing 九宫格/双拼/五笔/笔画/手写 drives the right layout immediately. Falls back
+            // choosing 九宫格/双拼/五笔/笔画 drives the right layout immediately. Falls back
             // to qwerty pinyin for the default style.
-            activeSubtype = Subtype.pinyinDefaultFor(prefs.internal.selectedKeyboardStyle.get())
+            activeSubtype = Subtype.pinyinDefaultFor(readNormalizedProductKeyboardStyle())
             return@launch
         }
         val subtype = list.find { it.id == activeSubtypeId } ?: list.firstOrNull() ?: Subtype.PINYIN_DEFAULT

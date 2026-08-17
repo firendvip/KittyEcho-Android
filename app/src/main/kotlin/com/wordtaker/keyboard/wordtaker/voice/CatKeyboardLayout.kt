@@ -7,21 +7,22 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,10 +35,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.width as dpRectWidth
 import com.wordtaker.keyboard.ime.window.LocalWindowController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,38 +55,29 @@ import com.wordtaker.keyboard.editorInstance
 import com.wordtaker.keyboard.ime.ImeUiMode
 import com.wordtaker.keyboard.keyboardManager
 import com.wordtaker.keyboard.nlpManager
-import com.wordtaker.keyboard.ime.keyboard.FlorisImeSizing
+import com.wordtaker.keyboard.ime.nlp.SuggestionCandidate
 import com.wordtaker.keyboard.ime.smartbar.CandidatesRow
 import com.wordtaker.keyboard.ime.text.TextInputLayout
+import com.wordtaker.keyboard.ime.theme.LocalFlorisImeThemeIsNight
 import com.wordtaker.keyboard.wordtaker.cat.CatSkin
 import com.wordtaker.keyboard.wordtaker.cat.CatState
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.settings.SettingsState
 import com.wordtaker.keyboard.wordtaker.speech.MicPermissionActivity
-import com.wordtaker.keyboard.wordtaker.toolbar.WT_TOOLBAR_CIRCLE_DARK
-import com.wordtaker.keyboard.wordtaker.toolbar.WT_TOOLBAR_ICON_TINT
-import com.wordtaker.keyboard.wordtaker.toolbar.WT_TOOLBAR_ICON_TINT_DARK
+import com.wordtaker.keyboard.wordtaker.speech.ParaformerCompactStatus
+import com.wordtaker.keyboard.wordtaker.toolbar.ToolbarCatButton
+import com.wordtaker.keyboard.wordtaker.toolbar.toolbarCatHorizontalInsetDp
+import com.wordtaker.keyboard.wordtaker.ui.DoubaoImeSkin
 import com.wordtaker.keyboard.wordtaker.ui.WordTakerSettingsActivity
 import com.wordtaker.lib.compose.conditional
 
 /**
- * Unified single surface for WordTaker: the keyboard界面 and the猫语音界面 are merged
- * into ONE panel with two in-place visual states (no second "屏"):
+ * WordTaker's single, fixed-height IME surface.
  *
- *  - 待机 (Idle): a thin top strip shows a small 趴着睡觉 cat (Zzz); below it the full
- *    keyboard (toolbar + candidates + keys) renders normally.
- *  - 录音中 (Recording): the keyboard keys fade out to a flat solid background and the
- *    SAME cat enlarges, walking back and forth in the centre of the whole panel.
- *  - 处理完成: the cat shrinks back into the top strip and the keyboard fades back in.
- *
- * Total panel height is CONSTANT across all states because every state is laid out
- * inside one [Box] whose height is fixed by [Column] (strip + keyboard). The recording
- * overlay uses `matchParentSize`/`fillMaxSize`, so it can never change the IME window
- * height — the transition is a pure cross-fade + cat scale, no vertical jump.
- *
- * Recording is started/stopped by tapping the cat (or via the toolbar voice icon /
- * long-press space, which drive [VoiceViewModel] the same way through onTap). The whole
- * recording→识别→润色→commit→写历史 chain is the existing [VoiceViewModel] flow.
+ * Idle and background processing keep the Doubao-aligned toolbar/candidate strip above the
+ * existing keyboard. Only the active recording cross-fades over the fixed bounds; background
+ * stages use the existing [CatSkin] in the toolbar so typing can continue without a height jump.
+ * Recognition, polishing, committing, and history persistence remain owned by [VoiceViewModel].
  */
 @Composable
 fun CatKeyboardLayout(modifier: Modifier = Modifier) {
@@ -95,6 +93,18 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
             historyRepository = AppGraph.historyRepository,
             settingsRepository = AppGraph.settingsRepository,
             toneController = AppGraph.toneController,
+            startHaptic = VoiceStartHaptic {
+                FlorisImeService.inputFeedbackController()?.voiceRecordingStart()
+            },
+            privacySource = VoicePrivacySource {
+                val info = editorInstance.activeInfo
+                VoicePrivacyContext.fromEditor(
+                    inputType = info.inputAttributes.raw,
+                    noPersonalizedLearning = info.imeOptions.flagNoPersonalizedLearning,
+                    incognito = keyboardManager.activeState.isIncognitoMode,
+                    editorSessionToken = editorInstance.activeInputSessionToken,
+                )
+            },
         )
     )
 
@@ -106,20 +116,22 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
 
     // Commit polished text into the focused input field.
     LaunchedEffect(vm) {
-        vm.committed.collect { text ->
-            editorInstance.commitText(text)
+        vm.committed.collect { commit ->
+            if (commit.belongsTo(editorInstance.activeInputSessionToken)) {
+                editorInstance.commitText(commit.text)
+            }
         }
     }
 
     // One-shot events: missing mic permission -> launch the transparent permission relay;
-    // model not ready -> open settings (model is bundled and installs silently).
+    // model not ready -> show the shared in-IME download confirmation; no PCM is captured.
     LaunchedEffect(vm) {
         vm.event.collect { event ->
             when (event) {
                 VoiceEvent.PermissionRequired ->
                     launchWordTaker(context, MicPermissionActivity::class.java)
                 VoiceEvent.ModelRequired ->
-                    launchWordTaker(context, WordTakerSettingsActivity::class.java)
+                    AppGraph.paraformerModelManager.onVoiceRequested()
             }
         }
     }
@@ -141,19 +153,24 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
         }
     }
 
-    val dark = isSystemInDarkTheme()
+    val dark = LocalFlorisImeThemeIsNight.current
     val noRipple = remember { MutableInteractionSource() }
 
-    // "active" = the cat has left the sleeping strip (recording OR processing). The
-    // keyboard fades out and the flat recording background fades in only while active.
-    val active = state.recording || state.busy
+    // Only the current recording covers the key grid. Background transcription, online polish,
+    // and success feedback stay compact in the fixed toolbar so typing can continue.
+    val active = state.recording
 
-    // 候选填满整行：用户打拼音/形码时，顶条整行让位给候选行 (CandidatesRow)，小猫头像/睡猫/
-    // "点击说话"/语音·折叠 全部隐藏；没有候选时恢复正常工具栏。录音时不显示候选行 (录音中本就
-    // 没有候选)，让位给猫的放大动画。候选与工具栏渲染在同一个 56dp 槽位里 (居中)，所以无论哪种
-    // 状态行高都恒为 CAT_STRIP_HEIGHT_DP，下方键盘绝不位移。
+    // Composing owns the complete strip. This deliberately observes editor content separately
+    // from suggestions so the row switches before an asynchronous provider publishes candidates.
     val candidates by nlpManager.activeCandidatesFlow.collectAsState()
-    val showCandidatesInStrip = candidates.isNotEmpty() && !active
+    val editorContent by editorInstance.activeContentFlow.collectAsState()
+    val toolbarState = candidateToolbarRenderState(
+        composingText = editorContent.composingText,
+        hasVisibleCandidates = candidates.isNotEmpty(),
+        isRecording = active,
+    )
+    val toolbarPresentation = toolbarState.presentation
+    val pinyinPreedit = toolbarState.preeditText
 
     // VISUAL (batch3-B): the toolbar strip now renders on EVERY keyboard mode — the former
     // QuickSymbolStrip was removed, and the 符号/12·34 pages carry their controls inside the
@@ -161,10 +178,8 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
     // panel height as the letter keyboard (hard requirement: zero height change on switch).
     val showToolbarStrip = true
 
-    // Cross-fade + cat-scale driver: 0 = 待机 (keyboard shown), 1 = 录音/处理 (solid + big cat).
-    // item5: 点猫即开始录音(触发不变)，但动画上猫由小变大、缓缓走出 —— 不再"直接跳出"。
-    // 用 FastOutSlowIn 缓出曲线 + 加长时长，进出都平滑渐进；录音态(进入)比退出更慢，让放大过程
-    // 更自然不突兀。
+    // Cross-fade driver: 0 = keyboard, 1 = the Doubao-style recording surface. The structural
+    // keyboard remains laid out underneath, so switching states never changes IME height.
     val activeAnim by animateFloatAsState(
         targetValue = if (active) 1f else 0f,
         animationSpec = tween(
@@ -174,38 +189,31 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
         label = "cat_active",
     )
 
-    // item7 / BUG #11: keyboardUiHeight() is a @Composable that reads several
-    // collectAsState-backed flows; it is re-evaluated each recomposition. Memoize the
-    // derived cat-box sizes on the resolved height so recording-cat sizing stays STABLE
-    // across recompositions and never contributes a per-frame height jitter (which reads
-    // as shifting / black bands). smallBox is a constant, largeBox derives from height.
-    val keyboardBodyHeight = FlorisImeSizing.keyboardUiHeight()
     // batch3-A: 顶栏高按实际屏宽比例 (0.152x屏宽)，真机/模拟器任何密度下占比一致。
     val stripHeight = catStripHeight()
-    // The cat draw box height interpolates between the small strip cat and the large
-    // centred recording cat — same CatSkin instance, so 趴顶条⇄走中间放大 is one fluid
-    // scale, never a swap to another sprite.
-    val smallBox = stripHeight
-    val largeBox = remember(keyboardBodyHeight) {
-        (keyboardBodyHeight * RECORDING_CAT_FRACTION)
-            .coerceIn(CAT_BOX_MIN_DP.dp, CAT_BOX_MAX_DP.dp)
+    val requestVoiceStart = {
+        val current = keyboardManager.activeState.imeUiMode
+        if (current != ImeUiMode.TEXT && current != ImeUiMode.CAT_VOICE) {
+            keyboardManager.activeState.imeUiMode = ImeUiMode.TEXT
+        }
+        VoiceTrigger.requestStart()
     }
+    val backgroundPending = backgroundPendingCount(state.phase, pending)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
             .clipToBounds(),
     ) {
-        // ---- Layer 1: the structural Column that FIXES the panel height ----
-        // [top strip = 工具栏图标 + 睡猫同一行] + [keyboard body]. Always laid out (height
-        // anchor); the keyboard body fades to alpha 0 during recording so the flat solid底
-        // shows through. The strip row holds the toolbar icons on the left/right; the猫 is
-        // drawn centred over this same row by Layer 3 — so设置/语音/折叠 与睡猫处于同一行
-        // (item2)，语音图标与猫垂直对齐、间距一致。工具栏图标在录音时随键盘一起淡出。
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // The strip slot — fixed height on EVERY keyboard mode, whatever it contains, so
-            // nothing below ever shifts. While typing (candidates present) the whole row
-            // becomes the candidate row, filling full width; otherwise it shows the toolbar.
+        // Layer 1 anchors panel height with a fixed toolbar/candidate slot plus the key grid.
+        // It remains laid out while recording and only changes alpha, preventing window jumps.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                // Alpha alone does not remove the hidden key grid from TalkBack's semantics tree.
+                .conditional(active) { Modifier.semantics { hideFromAccessibility() } },
+        ) {
+            // The strip slot has one persistent action order on every non-recording keyboard mode.
             if (showToolbarStrip) {
             Box(
                 modifier = Modifier
@@ -214,70 +222,20 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
                     .alpha(1f - activeAnim),
                 contentAlignment = Alignment.Center,
             ) {
-                if (showCandidatesInStrip) {
-                    // 候选占满整行 (小猫隐藏)。CandidatesRow 自身 fillMaxSize + 水平滚动，
-                    // 这里给它整行宽度并垂直居中于 56dp 槽内。
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(FlorisImeSizing.smartbarHeight)
-                            .align(Alignment.Center),
-                    ) {
-                        CandidatesRow()
-                    }
-                } else {
-                    // 微信风顶条 (待机)：田-grid 图标 · [🎤 点击说话] 药丸(填满中段) · ⌄ 收起。
-                    // 顶条不再显示任何猫 —— 猫只在点"点击说话"进入录音界面后才出现 (Layer 3)。
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = STRIP_SIDE_PADDING_DP.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        // Left: 小猫头像 (item4) — opens the in-IME settings panel in place
-                        // (与原 ToolbarCatButton 相同的动作：切换 SETTINGS).
-                        StripCatButton(
-                            contentDescription = "设置",
-                            dark = dark,
-                            onClick = {
-                                val current = keyboardManager.activeState.imeUiMode
-                                keyboardManager.activeState.imeUiMode =
-                                    if (current == ImeUiMode.SETTINGS) ImeUiMode.TEXT else ImeUiMode.SETTINGS
-                            },
-                        )
-                        Spacer(modifier = Modifier.width(STRIP_BUTTON_GAP_DP.dp))
-                        // 左对齐: 药丸 "点击说话" 只包裹自身内容宽度 (mic + 文字 + 小内边距)，
-                        // 紧跟在设置(田-grid)图标之后。点它进入录音界面并开始录音 (与原语音图标同一
-                        // 触发：切回 TEXT 界面 + VoiceTrigger.requestStart()).
-                        TalkPill(
-                            dark = dark,
-                            modifier = Modifier
-                                .wrapContentWidth()
-                                .height(PILL_HEIGHT_DP.dp),
-                            onClick = {
-                                val current = keyboardManager.activeState.imeUiMode
-                                if (current != ImeUiMode.TEXT && current != ImeUiMode.CAT_VOICE) {
-                                    keyboardManager.activeState.imeUiMode = ImeUiMode.TEXT
-                                }
-                                VoiceTrigger.requestStart()
-                            },
-                        )
-                        // batch3-C: 后台有 N 段在处理 → 药丸旁挂「忙碌小猫 ×N」角标。
-                        if (pending > 0) {
-                            Spacer(modifier = Modifier.width(STRIP_BUTTON_GAP_DP.dp))
-                            ProcessingCatsChip(count = pending, dark = dark)
-                        }
-                        // 药丸之后放弹性空白，把收起(折叠)图标顶到最右，右侧留空 (键盘底色)。
-                        Spacer(modifier = Modifier.weight(1f))
-                        // Right: collapse —— 收起键盘窗口。
-                        StripCircleButton(
-                            iconRes = R.drawable.ic_wt_collapse,
-                            contentDescription = "收起键盘",
-                            dark = dark,
-                            onClick = { FlorisImeService.hideUi() },
-                        )
-                    }
-                }
+                VoiceToolbarRow(
+                    dark = dark,
+                    candidates = candidates,
+                    pinyinPreedit = pinyinPreedit,
+                    presentation = toolbarPresentation,
+                    voiceState = state,
+                    pending = pending,
+                    onSettings = {
+                        val current = keyboardManager.activeState.imeUiMode
+                        keyboardManager.activeState.imeUiMode =
+                            if (current == ImeUiMode.SETTINGS) ImeUiMode.TEXT else ImeUiMode.SETTINGS
+                    },
+                    onStartRecording = requestVoiceStart,
+                )
             }
             } // end if (showToolbarStrip)
             // Keyboard body (candidates + keys). Fades out while recording.
@@ -288,184 +246,742 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
             }
         }
 
-        // ---- Layer 2: flat recording background, fading in over the keyboard ----
+        // ---- Layer 2: Doubao-style recording surface, fading over the anchored keyboard ----
         if (activeAnim > 0f) {
-            Box(
+            CatRecordingPanel(
+                state = state,
+                dark = dark,
+                showHint = !settings.minimal,
+                pending = backgroundPending,
+                onCancel = vm::cancel,
+                onFinish = vm::onTap,
                 modifier = Modifier
                     .matchParentSize()
                     .alpha(activeAnim)
-                    .background(if (dark) DARK_PANEL_BG else WT_PANEL_GRAY),
+                    // Never attach pointer input during the exit fade. Even a disabled full-size
+                    // clickable can intercept the first key press after recording ends.
+                    .conditional(state.recording) {
+                        Modifier.clickable(
+                            interactionSource = noRipple,
+                            indication = null,
+                            onClickLabel = "结束录音",
+                            onClick = vm::onTap,
+                        )
+                    },
             )
         }
+    }
+}
 
-        // ---- Layer 3: the recording cat, sized/positioned by the same activeAnim ----
-        // The cat ONLY appears in the recording screen — never in the idle toolbar. It
-        // grows from the small strip box up to the large centred recording box as the user
-        // taps 点击说话 and recording begins. We animate the box height + vertical bias so it
-        // slides+grows as one. Only rendered while active (录音/处理); the idle strip shows
-        // NO cat.
-        val boxHeight = lerpDp(smallBox, largeBox, activeAnim)
-        // Vertical alignment bias: -1f = top (strip), 0f = centre. Slide down as it grows.
-        val bias = -1f + activeAnim
-        if (activeAnim > 0f) {
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                // CRITICAL (item7 主流程修复)：待机态绝不能在整面板挂 clickable。
-                // Compose 里 `clickable(enabled = false)` 仍会占据 pointerInput 节点、
-                // 仍然消费 down/up 触摸事件（只是不回调 onClick），会把键盘按键的点击
-                // 全部吞掉 → 打不出字。所以只有 active(录音/处理) 时才组合这层全屏点击
-                // (用于点任意处停止录音)；待机时点猫开录由 Layer 4 顶条专属点击区负责，
-                // 键盘按键的触摸因此可以正常落到下面的 TextInputLayout 上。
-                .conditional(active) {
-                    Modifier.clickable(
-                        interactionSource = noRipple,
-                        indication = null,
-                        onClick = vm::onTap,
+@Composable
+private fun VoiceToolbarRow(
+    dark: Boolean,
+    candidates: List<SuggestionCandidate>,
+    pinyinPreedit: String?,
+    presentation: VoiceToolbarPresentation,
+    voiceState: VoiceUiState,
+    pending: Int,
+    onSettings: () -> Unit,
+    onStartRecording: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val palette = DoubaoImeSkin.palette(dark)
+    BoxWithConstraints(
+        modifier = modifier.fillMaxSize(),
+    ) {
+        when (presentation) {
+            VoiceToolbarPresentation.Candidates -> CandidateToolbarContent(
+                candidates = candidates,
+                pinyinPreedit = pinyinPreedit,
+                dark = dark,
+                modifier = Modifier.fillMaxSize(),
+            )
+            VoiceToolbarPresentation.Normal -> {
+                val sizing = voiceToolbarSizing(maxWidth.value)
+                val elements = voiceToolbarElements(
+                    phase = voiceState.phase,
+                    pending = pending,
+                    presentation = presentation,
+                )
+                val backgroundCount = backgroundPendingCount(voiceState.phase, pending)
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = sizing.sidePaddingDp.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    VoiceToolbarPrimaryActions(
+                        dark = dark,
+                        sizing = sizing,
+                        catContentDescription = "设置",
+                        onCatClick = onSettings,
+                        onTalkClick = onStartRecording,
                     )
-                },
+                    if (VoiceToolbarElement.Status in elements) {
+                        Spacer(
+                            modifier = Modifier.width(
+                                safeStatusVisualGapDp(sizing.itemGapDp).dp,
+                            ),
+                        )
+                        VoiceStatusIndicator(
+                            state = voiceState,
+                            dark = dark,
+                            sizing = sizing,
+                        )
+                    }
+                    if (VoiceToolbarElement.Background in elements) {
+                        Spacer(modifier = Modifier.width(sizing.itemGapDp.dp))
+                        ProcessingCatsChip(
+                            count = backgroundCount,
+                            dark = dark,
+                            sizing = sizing,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        ParaformerCompactStatus(
+                            manager = AppGraph.paraformerModelManager,
+                            candidatesOwnToolbar = false,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .height(TOOLBAR_DIVIDER_HEIGHT_DP.dp)
+                            .background(
+                                Color(palette.secondaryForegroundArgb).copy(alpha = 0.38f),
+                            ),
+                    )
+                    Spacer(modifier = Modifier.width(sizing.itemGapDp.dp))
+                    StripCircleButton(
+                        iconRes = R.drawable.ic_wt_collapse,
+                        contentDescription = "收起键盘",
+                        dark = dark,
+                        onClick = { FlorisImeService.hideUi() },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The complete left anchor group. Idle text and settings both call this exact composable so
+ * their cat and talk-pill centres cannot drift through duplicated padding or sizing rules.
+ */
+@Composable
+private fun VoiceToolbarPrimaryActions(
+    dark: Boolean,
+    sizing: VoiceToolbarSizing,
+    catContentDescription: String,
+    onCatClick: () -> Unit,
+    onTalkClick: () -> Unit,
+) {
+    ToolbarCatButton(
+        contentDescription = catContentDescription,
+        onClick = onCatClick,
+    )
+    Spacer(modifier = Modifier.width(sizing.itemGapDp.dp))
+    TalkPill(
+        dark = dark,
+        sizing = sizing,
+        modifier = Modifier.wrapContentWidth(),
+        onClick = onTalkClick,
+    )
+}
+
+/**
+ * Settings keeps the idle toolbar's left anchor group and only the collapse action on the
+ * right. Recording semantics are supplied by the caller so it can close settings first.
+ */
+@Composable
+internal fun ImeSettingsVoiceToolbarRow(
+    onCatClick: () -> Unit,
+    onStartRecording: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val dark = LocalFlorisImeThemeIsNight.current
+    val palette = DoubaoImeSkin.palette(dark)
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val sizing = voiceToolbarSizing(maxWidth.value)
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = sizing.sidePaddingDp.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            CatSkin(
-                state = CatState(
-                    recording = state.recording,
-                    level = state.level,
-                    busy = state.busy,
-                    error = false,
-                ),
+            VoiceToolbarPrimaryActions(
+                dark = dark,
+                sizing = sizing,
+                catContentDescription = "返回键盘",
+                onCatClick = onCatClick,
+                onTalkClick = onStartRecording,
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth(lerpFloat(STRIP_CAT_WIDTH_FRACTION, RECORDING_CAT_WIDTH_FRACTION, activeAnim))
-                    .height(boxHeight)
-                    .align(biasAlignment(bias))
-                    // item5: 猫精灵在盒内是底边锚定的 (CatSkin demo 世界，猫体视觉中心
-                    // ≈ 盒高 69% 处)，bias=0 只让「盒子」居中、猫本体偏下。把整盒按猫体
-                    // 视觉中心与盒中心的差值上移，使录音满态时猫在面板内真正垂直居中；
-                    // 随 activeAnim 渐进，过渡依旧平滑。
-                    .offset(y = -boxHeight * (CAT_VISUAL_CENTER_FRACTION * activeAnim)),
+                    .width(1.dp)
+                    .height(TOOLBAR_DIVIDER_HEIGHT_DP.dp)
+                    .background(
+                        Color(palette.secondaryForegroundArgb).copy(alpha = 0.38f),
+                    ),
+            )
+            Spacer(modifier = Modifier.width(sizing.itemGapDp.dp))
+            StripCircleButton(
+                iconRes = R.drawable.ic_wt_collapse,
+                contentDescription = "收起键盘",
+                dark = dark,
+                onClick = { FlorisImeService.hideUi() },
             )
         }
-        }
+    }
+}
 
-        // ---- Idle recording trigger is now the 点击说话 pill in the strip (Layer 1);
-        // no separate transparent tap overlay is needed. During recording, tapping
-        // anywhere stops (Layer 3's full-screen clickable while active). ----
-
-        // ---- Hints (suppressed in minimal mode) ----
-        // batch3-C：录音中不再显示实时字幕/识别/润色文案 —— 只有小猫动画 + 倾听提示；
-        // 定稿+润色+上屏全在后台并行（多猫角标示意）。
-        if (!settings.minimal && active && state.phase == VoicePhase.Recording) {
+/**
+ * Composing is an exclusive strip state: only the ordered candidate snapshot and its preedit
+ * are composed. Settings, speech, status, background and collapse actions are therefore absent
+ * from both pointer hit-testing and the accessibility tree.
+ */
+@Composable
+private fun CandidateToolbarContent(
+    candidates: List<SuggestionCandidate>,
+    pinyinPreedit: String?,
+    dark: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val palette = DoubaoImeSkin.palette(dark)
+    if (pinyinPreedit != null) {
+        Column(modifier = modifier) {
             Text(
-                text = "正在倾听...点击结束",
-                style = MaterialTheme.typography.titleMedium,
-                // P2-303: IME 组合树没有配套的深色 MaterialTheme，colorScheme.onSurface
-                // 在深色底上仍是近黑色、几乎不可见。按面板底色显式取反色。
-                color = if (dark) OVERLAY_FG_DARK else OVERLAY_FG_LIGHT,
+                text = pinyinPreedit,
+                color = Color(palette.foregroundArgb),
+                fontSize = PINYIN_PREEDIT_SIZE_SP.sp,
+                lineHeight = PINYIN_PREEDIT_LINE_HEIGHT_SP.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = HINT_EDGE_PADDING_DP.dp)
-                    .alpha(activeAnim),
+                    .fillMaxWidth()
+                    .height(DoubaoImeSkin.pinyinPreeditHeightDp.dp)
+                    .padding(horizontal = PINYIN_PREEDIT_SIDE_DP.dp),
             )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) {
+                CandidatesRow(
+                    hiddenSecondaryTextProviderIds =
+                        DoubaoImeSkin.liftedSecondaryTextProviderIds,
+                    candidatesOverride = candidates,
+                )
+            }
         }
+    } else {
+        CandidatesRow(
+            modifier = modifier,
+            showSecondaryText = true,
+            candidatesOverride = candidates,
+        )
+    }
+}
 
-        // ---- batch3-C 多猫并行角标：录音界面右上角显示「忙碌小猫 ×N」 ----
-        if (active && pending > 0) {
+@Composable
+private fun CatRecordingPanel(
+    state: VoiceUiState,
+    dark: Boolean,
+    showHint: Boolean,
+    pending: Int,
+    onCancel: () -> Unit,
+    onFinish: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val palette = DoubaoImeSkin.palette(dark)
+    Box(
+        modifier = modifier
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color(palette.voiceGradientStartArgb),
+                        Color(palette.voiceGradientEndArgb),
+                    ),
+                ),
+            ),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(
+                    start = VOICE_PANEL_SIDE_DP.dp,
+                    end = VOICE_PANEL_SIDE_DP.dp,
+                    top = VOICE_PANEL_TOP_DP.dp,
+                    bottom = VOICE_PANEL_BOTTOM_DP.dp,
+                ),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (showHint) {
+                Text(
+                    text = "正在倾听",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(palette.secondaryForegroundArgb),
+                    modifier = Modifier.semantics { hideFromAccessibility() },
+                )
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            VoiceCatFeedback(
+                state = state,
+                modifier = Modifier
+                    .width(VOICE_CAT_WIDTH_DP.dp)
+                    .height(VOICE_CAT_HEIGHT_DP.dp),
+            )
+            if (showHint) {
+                Text(
+                    text = "点击结束",
+                    fontSize = VOICE_HINT_SIZE_SP.sp,
+                    color = Color(palette.secondaryForegroundArgb),
+                    modifier = Modifier
+                        .padding(top = VOICE_HINT_TOP_DP.dp)
+                        .semantics { hideFromAccessibility() },
+                )
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(VOICE_ACTION_GAP_DP.dp),
+            ) {
+                VoiceActionButton(
+                    label = "取消本次",
+                    background = Color(palette.keyArgb).copy(alpha = 0.86f),
+                    foreground = Color(palette.foregroundArgb),
+                    interactive = state.recording,
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                )
+                VoiceActionButton(
+                    label = "结束",
+                    background = Color(palette.keyArgb).copy(alpha = 0.96f),
+                    foreground = Color(palette.foregroundArgb),
+                    interactive = state.recording,
+                    onClick = onFinish,
+                    modifier = Modifier.weight(1f),
+                )
+                }
+        }
+        if (pending > 0) {
             ProcessingCatsChip(
                 count = pending,
                 dark = dark,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = HINT_EDGE_PADDING_DP.dp, end = CHIP_EDGE_PADDING_DP.dp)
-                    .alpha(activeAnim),
-            )
-        }
-
-        // ---- 需求#9：微信风"取消"按钮，录音/识别/润色全程可点，随时中止 ----
-        if (active) {
-            CancelPill(
-                dark = dark,
-                onClick = vm::cancel,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = CANCEL_EDGE_PADDING_DP.dp)
-                    .alpha(activeAnim),
+                    .padding(top = CHIP_EDGE_PADDING_DP.dp, end = CHIP_EDGE_PADDING_DP.dp),
             )
         }
     }
 }
 
-/**
- * 需求#9 "取消" 药丸：灰底圆角，居中灰字，点击调用 [VoiceViewModel.cancel]。
- * 录音/识别/润色任意阶段都显示，让用户随时中止。
- */
 @Composable
-private fun CancelPill(
-    dark: Boolean,
+private fun VoiceCatFeedback(
+    state: VoiceUiState,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier.semantics {
+            contentDescription = voiceStatusDescription(state.phase, state.polishOutcome)
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        CatSkin(
+            state = state.toCatState(),
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+@Composable
+private fun VoiceActionButton(
+    label: String,
+    background: Color,
+    foreground: Color,
+    interactive: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val bg = if (dark) CANCEL_BG_DARK else CANCEL_BG_LIGHT
-    val fg = if (dark) PILL_FG_DARK else PILL_FG_LIGHT
     val noRipple = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(PILL_CORNER_DP.dp))
-            .background(bg)
-            .clickable(
-                interactionSource = noRipple,
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(horizontal = CANCEL_H_PADDING_DP.dp, vertical = CANCEL_V_PADDING_DP.dp),
+            .height(VOICE_ACTION_HEIGHT_DP.dp)
+            .clip(RoundedCornerShape(VOICE_ACTION_CORNER_DP.dp))
+            .background(background)
+            .conditional(interactive) {
+                Modifier.clickable(
+                    interactionSource = noRipple,
+                    indication = null,
+                    onClick = onClick,
+                )
+            },
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "取消",
+            text = label,
             style = MaterialTheme.typography.bodyMedium,
-            color = fg,
+            color = foreground,
         )
     }
 }
 
-/**
- * 微信风 "点击说话" 药丸：中段占满的圆角浅色底 + 麦克风字形 + "点击说话" 灰字，居中。
- * 点它 = 进入录音界面并开始录音 (onClick 由调用处提供，触发 VoiceTrigger.requestStart()).
- * 浅色模式白底、深色模式深灰底；文字/图标用工具栏统一灰 (深色模式转浅)。
- */
+@Composable
+private fun VoiceStatusIndicator(
+    state: VoiceUiState,
+    dark: Boolean,
+    sizing: VoiceToolbarSizing,
+    modifier: Modifier = Modifier,
+) {
+    val palette = DoubaoImeSkin.palette(dark)
+    val visual = statusCatVisualSpec(state.phase, sizing)
+    Row(
+        modifier = modifier
+            .height(
+                maxOf(
+                    DoubaoImeSkin.toolbarTouchTargetDp,
+                    visual.heightDp.toFloat(),
+                ).dp,
+            )
+            .semantics {
+                contentDescription = voiceStatusDescription(state.phase, state.polishOutcome)
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .width(visual.viewportWidthDp.dp)
+                .height(visual.heightDp.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            CatSkin(
+                state = state.toCatState(),
+                modifier = Modifier
+                    .width(visual.widthDp.dp)
+                    .height(visual.heightDp.dp),
+            )
+        }
+        if (sizing.showStatusText) {
+            Text(
+                text = voiceStatusLabel(state.phase, state.polishOutcome),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(palette.secondaryForegroundArgb),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(end = STATUS_TEXT_END_PADDING_DP.dp)
+                    .semantics { hideFromAccessibility() },
+            )
+        }
+    }
+}
+
+/** 豆包式语音胶囊；点击后仍通过 KittyEcho 的 [VoiceTrigger] 启动原有语音链路。 */
 @Composable
 private fun TalkPill(
     dark: Boolean,
+    sizing: VoiceToolbarSizing,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val pillBg = if (dark) PILL_BG_DARK else PILL_BG_LIGHT
-    val fg = if (dark) PILL_FG_DARK else PILL_FG_LIGHT
-    Row(
+    val palette = DoubaoImeSkin.palette(dark)
+    val pillBg = Color(palette.keyArgb)
+    val fg = Color(palette.secondaryForegroundArgb)
+    val noRipple = remember { MutableInteractionSource() }
+    Box(
         modifier = modifier
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(PILL_CORNER_DP.dp))
-            .background(pillBg)
-            .clickable(onClick = onClick)
-            .padding(horizontal = PILL_H_PADDING_DP.dp),
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
+            .height(DoubaoImeSkin.toolbarTouchTargetDp.dp)
+            .clickable(
+                interactionSource = noRipple,
+                indication = null,
+                onClickLabel = "开始新录音",
+                onClick = onClick,
+            )
+            .semantics {
+                contentDescription = "开始新录音"
+            },
+        contentAlignment = Alignment.Center,
     ) {
-        androidx.compose.material3.Icon(
-            painter = androidx.compose.ui.res.painterResource(R.drawable.ic_wt_voice),
-            contentDescription = null,
-            tint = fg,
-            modifier = Modifier.size(PILL_MIC_SIZE_DP.dp),
-        )
-        Spacer(modifier = Modifier.width(PILL_MIC_GAP_DP.dp))
-        Text(
-            text = "点击说话",
-            style = MaterialTheme.typography.bodyMedium,
-            color = fg,
-        )
+        Row(
+            modifier = Modifier
+                .height(TalkPillLayoutSpec.heightDp.dp)
+                .clip(RoundedCornerShape(TalkPillLayoutSpec.cornerRadiusDp.dp))
+                .background(pillBg)
+                .padding(horizontal = sizing.talkHorizontalPaddingDp.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            androidx.compose.material3.Icon(
+                painter = androidx.compose.ui.res.painterResource(R.drawable.ic_wt_voice),
+                contentDescription = null,
+                tint = fg,
+                modifier = Modifier.size(sizing.talkMicSizeDp.dp),
+            )
+            Spacer(modifier = Modifier.width(sizing.talkMicGapDp.dp))
+            Text(
+                text = "点击说话",
+                style = MaterialTheme.typography.bodyMedium,
+                color = fg,
+                modifier = Modifier.semantics { hideFromAccessibility() },
+            )
+        }
     }
 }
 
+internal fun VoiceUiState.toCatState(): CatState = CatState(
+    recording = recording,
+    level = level,
+    busy = phase == VoicePhase.Recognizing || phase == VoicePhase.Polishing,
+    polishing = phase == VoicePhase.Polishing,
+    success = phase == VoicePhase.Success,
+)
+
+internal fun voiceStatusLabel(
+    phase: VoicePhase,
+    outcome: com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind? = null,
+): String = when (phase) {
+    VoicePhase.Recording -> "录音中"
+    VoicePhase.Recognizing -> "转录中"
+    VoicePhase.Polishing -> "润色中"
+    VoicePhase.Success -> when (outcome) {
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.ShortDirect -> "短句直出"
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.OfflineDirect -> "离线直出"
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.FallbackQuota ->
+            "未润色：额度不足"
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.FallbackAuthExpired ->
+            "未润色：登录已失效"
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.FallbackTimeout ->
+            "未润色：服务超时"
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.FallbackNetwork ->
+            "未润色：网络异常"
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.FallbackServer,
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.FallbackUnknown,
+        -> "未润色：服务异常"
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.Polished,
+        null,
+        -> "已完成"
+    }
+    VoicePhase.Idle -> "点击说话"
+}
+
+internal fun voiceStatusDescription(
+    phase: VoicePhase,
+    outcome: com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind? = null,
+): String = when (phase) {
+    VoicePhase.Recording -> "正在录音，小猫正在聆听"
+    VoicePhase.Recognizing -> "正在转录，小猫正在思考"
+    VoicePhase.Polishing -> "正在在线润色，小猫正在思考"
+    VoicePhase.Success -> when (outcome) {
+        com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind.Polished,
+        null,
+        -> "语音输入完成，小猫送来星光"
+        else -> voiceStatusLabel(phase, outcome)
+    }
+    VoicePhase.Idle -> "语音输入空闲"
+}
+
+internal fun backgroundPendingCount(phase: VoicePhase, pending: Int): Int = when (phase) {
+    VoicePhase.Recognizing, VoicePhase.Polishing -> (pending - 1).coerceAtLeast(0)
+    VoicePhase.Recording, VoicePhase.Success, VoicePhase.Idle -> pending
+}
+
+internal object TalkPillLayoutSpec {
+    const val heightDp = 36
+    const val cornerRadiusDp = 18
+    const val horizontalPaddingDp = 12
+    const val microphoneSizeDp = 16
+    const val iconLabelGapDp = 6
+}
+
+internal enum class VoiceToolbarPresentation {
+    Normal,
+    Candidates,
+}
+
+internal data class CandidateToolbarRenderState(
+    val presentation: VoiceToolbarPresentation,
+    val preeditText: String?,
+)
+
 /**
- * 顶栏白圆钮（微信/iOS 风）：36dp 白色圆底 + 居中线性图标。用 Box 而非 Material3
- * IconButton，避免其最小触控目标(48dp)把圆底撑大 —— 尺寸即所见尺寸。
+ * Editor composing is the sole source of truth for the raw preedit line. Candidate providers may
+ * publish empty, reordered, local, or cloud-merged snapshots asynchronously without changing it.
  */
+internal fun candidateToolbarRenderState(
+    composingText: String,
+    hasVisibleCandidates: Boolean,
+    isRecording: Boolean,
+): CandidateToolbarRenderState {
+    val presentation = voiceToolbarPresentation(
+        hasActiveComposing = composingText.isNotEmpty(),
+        hasVisibleCandidates = hasVisibleCandidates,
+        isRecording = isRecording,
+    )
+    return CandidateToolbarRenderState(
+        presentation = presentation,
+        preeditText = composingText.takeIf {
+            presentation == VoiceToolbarPresentation.Candidates && it.isNotEmpty()
+        },
+    )
+}
+
+internal fun voiceToolbarPresentation(
+    hasActiveComposing: Boolean,
+    hasVisibleCandidates: Boolean,
+    isRecording: Boolean,
+): VoiceToolbarPresentation =
+    if (!isRecording && (hasActiveComposing || hasVisibleCandidates)) {
+        VoiceToolbarPresentation.Candidates
+    } else {
+        VoiceToolbarPresentation.Normal
+    }
+
+internal enum class VoiceToolbarElement {
+    Settings,
+    Talk,
+    Status,
+    Background,
+    Flexible,
+    Collapse,
+    Candidates,
+}
+
+internal fun voiceToolbarElements(
+    phase: VoicePhase,
+    pending: Int,
+    presentation: VoiceToolbarPresentation = VoiceToolbarPresentation.Normal,
+): List<VoiceToolbarElement> =
+    if (presentation == VoiceToolbarPresentation.Candidates) {
+        listOf(VoiceToolbarElement.Candidates)
+    } else {
+        buildList {
+            add(VoiceToolbarElement.Settings)
+            add(VoiceToolbarElement.Talk)
+            if (phase == VoicePhase.Recognizing ||
+                phase == VoicePhase.Polishing ||
+                phase == VoicePhase.Success
+            ) {
+                add(VoiceToolbarElement.Status)
+            }
+            if (backgroundPendingCount(phase, pending) > 0) {
+                add(VoiceToolbarElement.Background)
+            }
+            add(VoiceToolbarElement.Flexible)
+            add(VoiceToolbarElement.Collapse)
+        }
+    }
+
+internal const val MIN_STATUS_VISUAL_GAP_DP = 4
+
+internal fun safeStatusVisualGapDp(requestedGapDp: Int): Int =
+    requestedGapDp.coerceAtLeast(MIN_STATUS_VISUAL_GAP_DP)
+
+internal object StatusCatVisualSpec {
+    const val wideWidthDp = 35
+    const val wideHeightDp = 44
+    const val compactWidthDp = 18
+    const val compactHeightDp = 32
+    const val polishingWideWidthDp = 46
+    const val polishingWideHeightDp = 57
+    const val polishingCompactWidthDp = 23
+    const val polishingCompactHeightDp = 40
+    const val polishingMotionSpacePerSideDp = 8
+    const val maxHeightDp = polishingWideHeightDp
+}
+
+internal data class StatusCatVisual(
+    val widthDp: Int,
+    val heightDp: Int,
+    val motionSpacePerSideDp: Int,
+) {
+    val viewportWidthDp: Int
+        get() = widthDp + motionSpacePerSideDp * 2
+}
+
+internal data class VoiceToolbarSizing(
+    val showStatusText: Boolean,
+    val sidePaddingDp: Int,
+    val itemGapDp: Int,
+    val talkHorizontalPaddingDp: Int,
+    val talkMicSizeDp: Int,
+    val talkMicGapDp: Int,
+    val statusCatWidthDp: Int,
+    val statusCatHeightDp: Int,
+    val chipHorizontalPaddingDp: Int,
+    val chipCatSizeDp: Int,
+    val chipGapDp: Int,
+)
+
+private val WideVoiceToolbarSizing = VoiceToolbarSizing(
+    showStatusText = true,
+    sidePaddingDp = toolbarCatHorizontalInsetDp(STATUS_TEXT_MIN_WIDTH_DP.toFloat()),
+    itemGapDp = 8,
+    talkHorizontalPaddingDp = TalkPillLayoutSpec.horizontalPaddingDp,
+    talkMicSizeDp = TalkPillLayoutSpec.microphoneSizeDp,
+    talkMicGapDp = TalkPillLayoutSpec.iconLabelGapDp,
+    statusCatWidthDp = StatusCatVisualSpec.wideWidthDp,
+    statusCatHeightDp = StatusCatVisualSpec.wideHeightDp,
+    chipHorizontalPaddingDp = 10,
+    chipCatSizeDp = 18,
+    chipGapDp = 4,
+)
+
+private val CompactVoiceToolbarSizing = VoiceToolbarSizing(
+    showStatusText = false,
+    sidePaddingDp = toolbarCatHorizontalInsetDp(0f),
+    itemGapDp = MIN_STATUS_VISUAL_GAP_DP,
+    talkHorizontalPaddingDp = TalkPillLayoutSpec.horizontalPaddingDp,
+    talkMicSizeDp = TalkPillLayoutSpec.microphoneSizeDp,
+    talkMicGapDp = TalkPillLayoutSpec.iconLabelGapDp,
+    statusCatWidthDp = StatusCatVisualSpec.compactWidthDp,
+    statusCatHeightDp = StatusCatVisualSpec.compactHeightDp,
+    chipHorizontalPaddingDp = 1,
+    chipCatSizeDp = 12,
+    chipGapDp = 1,
+)
+
+/**
+ * On narrow IME windows only decoration is compacted: both toolbar actions retain their
+ * 44/48dp hit targets and the complete "点击说话" label remains visible.
+ */
+internal fun voiceToolbarSizing(widthDp: Float): VoiceToolbarSizing =
+    if (widthDp >= STATUS_TEXT_MIN_WIDTH_DP) {
+        WideVoiceToolbarSizing
+    } else {
+        CompactVoiceToolbarSizing
+    }
+
+internal fun statusCatVisualSpec(
+    phase: VoicePhase,
+    sizing: VoiceToolbarSizing,
+): StatusCatVisual =
+    if (phase == VoicePhase.Polishing) {
+        if (sizing.showStatusText) {
+            StatusCatVisual(
+                widthDp = StatusCatVisualSpec.polishingWideWidthDp,
+                heightDp = StatusCatVisualSpec.polishingWideHeightDp,
+                motionSpacePerSideDp = StatusCatVisualSpec.polishingMotionSpacePerSideDp,
+            )
+        } else {
+            StatusCatVisual(
+                widthDp = StatusCatVisualSpec.polishingCompactWidthDp,
+                heightDp = StatusCatVisualSpec.polishingCompactHeightDp,
+                motionSpacePerSideDp = StatusCatVisualSpec.polishingMotionSpacePerSideDp,
+            )
+        }
+    } else {
+        StatusCatVisual(
+            widthDp = sizing.statusCatWidthDp,
+            heightDp = sizing.statusCatHeightDp,
+            motionSpacePerSideDp = 0,
+        )
+    }
+
+/** 顶栏透明圆形动作区；用 [Box] 保持图标的精确视觉尺寸。 */
 @Composable
 private fun StripCircleButton(
     iconRes: Int,
@@ -474,39 +990,13 @@ private fun StripCircleButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = modifier
-            .size(STRIP_CIRCLE_BUTTON_DP.dp)
-            .clip(androidx.compose.foundation.shape.CircleShape)
-            .background(if (dark) WT_TOOLBAR_CIRCLE_DARK else androidx.compose.ui.graphics.Color.White)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        androidx.compose.material3.Icon(
-            painter = androidx.compose.ui.res.painterResource(iconRes),
-            contentDescription = contentDescription,
-            tint = if (dark) WT_TOOLBAR_ICON_TINT_DARK else WT_TOOLBAR_ICON_TINT,
-            modifier = Modifier.size(STRIP_CIRCLE_ICON_DP.dp),
-        )
-    }
-}
-
-/**
- * 顶栏小猫头像钮 (item4 → batch3-A 去白圈)：只留猫头图形 (ic_brand_cat_bare，无白色
- * 圆角矩形底)，深浅色同。外层 44dp 透明 Box 保证触控目标 ≥44dp；indication=null 避免
- * 焦点/水波纹在无底钮上显示成灰色方块。猫头直径 ≈ 0.62x44 ≈ 27dp，视觉与原白圈持平。
- */
-@Composable
-private fun StripCatButton(
-    contentDescription: String?,
-    dark: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
+    val palette = DoubaoImeSkin.palette(dark)
     val noRipple = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
-            .size(STRIP_CAT_TOUCH_DP.dp)
+            .size(DoubaoImeSkin.toolbarTouchTargetDp.dp)
+            .clip(RoundedCornerShape(DoubaoImeSkin.toolbarTouchTargetDp.dp))
+            .background(Color.Transparent)
             .clickable(
                 interactionSource = noRipple,
                 indication = null,
@@ -515,10 +1005,10 @@ private fun StripCatButton(
         contentAlignment = Alignment.Center,
     ) {
         androidx.compose.material3.Icon(
-            painter = androidx.compose.ui.res.painterResource(R.drawable.ic_brand_cat_bare),
+            painter = androidx.compose.ui.res.painterResource(iconRes),
             contentDescription = contentDescription,
-            tint = androidx.compose.ui.graphics.Color.Unspecified,
-            modifier = Modifier.size(STRIP_CAT_GLYPH_DP.dp),
+            tint = Color(palette.foregroundArgb),
+            modifier = Modifier.size(STRIP_CIRCLE_ICON_DP.dp),
         )
     }
 }
@@ -532,111 +1022,86 @@ private fun ProcessingCatsChip(
     count: Int,
     dark: Boolean,
     modifier: Modifier = Modifier,
+    sizing: VoiceToolbarSizing = WideVoiceToolbarSizing,
 ) {
-    val bg = if (dark) PILL_BG_DARK else PILL_BG_LIGHT
-    val fg = if (dark) PILL_FG_DARK else PILL_FG_LIGHT
+    val palette = DoubaoImeSkin.palette(dark)
+    val bg = Color(palette.keyArgb)
+    val fg = Color(palette.secondaryForegroundArgb)
     Row(
         modifier = modifier
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(PILL_CORNER_DP.dp))
+            .clip(RoundedCornerShape(TalkPillLayoutSpec.cornerRadiusDp.dp))
             .background(bg)
-            .padding(horizontal = CHIP_H_PADDING_DP.dp, vertical = CHIP_V_PADDING_DP.dp),
+            .semantics {
+                contentDescription = "${count}段后台处理中"
+            }
+            .padding(
+                horizontal = sizing.chipHorizontalPaddingDp.dp,
+                vertical = CHIP_V_PADDING_DP.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         androidx.compose.material3.Icon(
             painter = androidx.compose.ui.res.painterResource(R.drawable.ic_brand_cat_bare),
-            contentDescription = "${count}段处理中",
+            contentDescription = null,
             tint = androidx.compose.ui.graphics.Color.Unspecified,
-            modifier = Modifier.size(CHIP_CAT_DP.dp),
+            modifier = Modifier.size(sizing.chipCatSizeDp.dp),
         )
-        Spacer(modifier = Modifier.width(CHIP_GAP_DP.dp))
+        Spacer(modifier = Modifier.width(sizing.chipGapDp.dp))
         Text(
             text = "×$count",
             style = MaterialTheme.typography.bodyMedium,
             color = fg,
+            modifier = Modifier.semantics { hideFromAccessibility() },
         )
     }
 }
 
-// --- small animation helpers (avoid pulling in extra imports) ---
-private fun lerpFloat(a: Float, b: Float, t: Float) = a + (b - a) * t
-private fun lerpDp(a: androidx.compose.ui.unit.Dp, b: androidx.compose.ui.unit.Dp, t: Float) =
-    a + (b - a) * t
-private fun biasAlignment(bias: Float) = androidx.compose.ui.BiasAlignment(0f, bias.coerceIn(-1f, 1f))
-
 // Sizing constants -----------------------------------------------------------
-// Top strip (待机 sleeping cat + 工具栏图标同一行) height — small, so the keyboard keeps
-// almost all the panel. The sleeping cat is bottom-anchored inside this strip; the icons
-// are vertically centred in the same row.
-// item3: 设置/历史面板需要引用它来对齐总高 (顶条 + 键盘 = 工具栏 + 面板)。
-// batch3-A: 顶栏高 = 0.152x实际屏宽 (参考图量化)，不再固定 59dp —— 见 [catStripHeight]。
-internal const val CAT_STRIP_HEIGHT_RATIO = 0.152f
+// 顶栏高按参考界面量化为实际屏宽的 0.152；设置/历史面板复用该值以保持总高一致。
+internal const val CAT_STRIP_HEIGHT_RATIO = DoubaoImeSkin.toolbarHeightRatio
 private val CAT_STRIP_HEIGHT_FALLBACK = 59.dp
 
-/** 顶栏高：0.152x实际屏宽；根窗口宽未知 (首帧/Fallback) 时退回 59dp。 */
+/** 顶栏高：0.152x实际屏宽，并钳制到可容纳预编辑与候选字形的最小高度。 */
 @Composable
 internal fun catStripHeight(): Dp {
     val windowController = LocalWindowController.current
     val windowSpec by windowController.activeWindowSpec.collectAsState()
     val width = windowSpec.constraints.rootBounds.dpRectWidth
-    return if (width > 0.dp) width * CAT_STRIP_HEIGHT_RATIO else CAT_STRIP_HEIGHT_FALLBACK
+    return if (width > 0.dp) {
+        (width * CAT_STRIP_HEIGHT_RATIO).coerceAtLeast(DoubaoImeSkin.minimumToolbarHeightDp.dp)
+    } else {
+        CAT_STRIP_HEIGHT_FALLBACK
+    }
 }
 
-// item8: 白圆钮"抱紧"图标 —— 圆只比图标大 6dp (26 vs 20)，与设置态工具栏圆钮一致。
-private const val STRIP_CIRCLE_BUTTON_DP = 26
 private const val STRIP_CIRCLE_ICON_DP = 20
-// batch3-A: 小猫头像钮去白圈 —— 44dp 不可见触控区 + 44dp 无底猫头矢量
-// (头部占视口 ~62%，猫头直径 ≈ 27dp，补偿去圈后的视觉变小)。
-private const val STRIP_CAT_TOUCH_DP = 44
-private const val STRIP_CAT_GLYPH_DP = 44
-// item2: 猫尺寸按手机端调到合适大小 —— 在这一行里与 28dp 图标协调，不过大不过小。
-// 0.42→0.34 收窄睡猫宽度盒，使它在同一行里与图标比例和谐 (参考 CatSkinFx 头身比)。
-private const val STRIP_CAT_WIDTH_FRACTION = 0.34f
+// Keep KittyEcho's own mark, but place it in the same compact white circular control used by
+// Doubao's command button rather than the former oversized bare avatar.
 // 顶条图标贴行两侧的水平内边距 + 图标/药丸之间的间距。
-private const val STRIP_SIDE_PADDING_DP = 6
-private const val STRIP_BUTTON_GAP_DP = 8
-// 微信风 "点击说话" 药丸尺寸/配色 —— 圆角浅色底填满中段，麦克风+灰字居中。
-private const val PILL_HEIGHT_DP = 36
-private const val PILL_CORNER_DP = 18
-private const val PILL_H_PADDING_DP = 12
-private const val PILL_MIC_SIZE_DP = 16
-private const val PILL_MIC_GAP_DP = 6
-private val PILL_BG_LIGHT = androidx.compose.ui.graphics.Color(0xFFFFFFFF)
-private val PILL_BG_DARK = androidx.compose.ui.graphics.Color(0xFF2E3033)
-private val PILL_FG_LIGHT = androidx.compose.ui.graphics.Color(0xFF6B6F73)
-private val PILL_FG_DARK = androidx.compose.ui.graphics.Color(0xFFBFC3C7)
-// Recording cat: large box centred over the whole panel (keyboard body height fraction).
-// 录音界面小猫整体缩小 10%（0.62→0.558，钳制值同步 ×0.9），布局逻辑不变。
-private const val RECORDING_CAT_FRACTION = 0.558f
-private const val RECORDING_CAT_WIDTH_FRACTION = 0.558f
-private const val CAT_BOX_MIN_DP = 117
-private const val CAT_BOX_MAX_DP = 180
-// item5: 猫体视觉中心 (demo-y≈50) 相对盒中心 (demo-y=36) 的偏差 / 盒高 (72) ≈ 0.19。
-// 录音满态把猫盒上移这个比例的盒高，使猫本体在面板内垂直居中。
-private const val CAT_VISUAL_CENTER_FRACTION = 0.19f
-private const val HINT_EDGE_PADDING_DP = 8
-// batch3-C 多猫并行角标（忙碌小猫 ×N）尺寸。
-private const val CHIP_H_PADDING_DP = 10
-private const val CHIP_V_PADDING_DP = 4
-private const val CHIP_CAT_DP = 18
-private const val CHIP_GAP_DP = 4
-private const val CHIP_EDGE_PADDING_DP = 12
-// 需求#9 "取消" 药丸尺寸/配色。
-private const val CANCEL_EDGE_PADDING_DP = 12
-private const val CANCEL_H_PADDING_DP = 20
-private const val CANCEL_V_PADDING_DP = 8
-private val CANCEL_BG_LIGHT = androidx.compose.ui.graphics.Color(0xFFE0E0E0)
-private val CANCEL_BG_DARK = androidx.compose.ui.graphics.Color(0xFF3A3D40)
-// item5: 出场更平滑 —— 进入(放大走出)比退出更慢，缓出曲线见 activeAnim。
-private const val ENTER_TRANSITION_MS = 520
-private const val EXIT_TRANSITION_MS = 360
+private const val TOOLBAR_DIVIDER_HEIGHT_DP = 24
 
-// #7 面板背景：与微信键盘底色 (#ECECEC) 一致，冷调浅灰、不发暖。深色模式协调深灰。
-// 键盘面板 (TextInputLayout) 也复用 WT_PANEL_GRAY，所以这两个常量定义在 voice 包内共享。
-internal val WT_PANEL_GRAY = androidx.compose.ui.graphics.Color(0xFFECECEC)
-internal val DARK_PANEL_BG = androidx.compose.ui.graphics.Color(0xFF202124)
-// P2-303 录音界面状态文字/字幕的前景色：随面板深浅取高对比色。
-private val OVERLAY_FG_LIGHT = androidx.compose.ui.graphics.Color(0xFF202124)
-private val OVERLAY_FG_DARK = androidx.compose.ui.graphics.Color(0xFFE8EAED)
+private const val PINYIN_PREEDIT_SIDE_DP = 5
+private const val PINYIN_PREEDIT_SIZE_SP = 16
+private const val PINYIN_PREEDIT_LINE_HEIGHT_SP = 18
+private const val CANDIDATE_ACTION_GAP_DP = 6
+
+private const val VOICE_PANEL_SIDE_DP = 18
+private const val VOICE_PANEL_TOP_DP = 14
+private const val VOICE_PANEL_BOTTOM_DP = 16
+private const val VOICE_CAT_WIDTH_DP = 190
+private const val VOICE_CAT_HEIGHT_DP = 136
+private const val VOICE_HINT_SIZE_SP = 13
+private const val VOICE_HINT_TOP_DP = 8
+private const val VOICE_ACTION_HEIGHT_DP = 48
+private const val VOICE_ACTION_CORNER_DP = 24
+private const val VOICE_ACTION_GAP_DP = 14
+private const val STATUS_TEXT_END_PADDING_DP = 4
+private const val STATUS_TEXT_MIN_WIDTH_DP = 380
+// batch3-C 多猫并行角标（忙碌小猫 ×N）尺寸。
+private const val CHIP_V_PADDING_DP = 4
+private const val CHIP_EDGE_PADDING_DP = 12
+private const val ENTER_TRANSITION_MS = 360
+private const val EXIT_TRANSITION_MS = 220
 
 /** Launches a WordTaker activity from the IME. */
 private fun launchWordTaker(context: Context, target: Class<*>) {

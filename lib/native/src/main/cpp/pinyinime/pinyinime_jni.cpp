@@ -113,6 +113,31 @@ Java_org_florisboard_libnative_PinyinDecoderKt_nativeGetFixedLen(JNIEnv *,
   return static_cast<jint>(im_get_fixed_len());
 }
 
+JNIEXPORT jintArray JNICALL
+Java_org_florisboard_libnative_PinyinDecoderKt_nativeGetSplStartPositions(
+    JNIEnv *env, jclass) {
+  ScopedLock lock;
+  const uint16 *spl_start = nullptr;
+  const size_t spelling_count = im_get_spl_start_pos(spl_start);
+  if (spl_start == nullptr || spelling_count == 0) {
+    return env->NewIntArray(0);
+  }
+  const jsize output_size = static_cast<jsize>(spelling_count + 1);
+  jintArray output = env->NewIntArray(output_size);
+  if (output == nullptr) {
+    return nullptr;
+  }
+  jint values[33];
+  if (output_size > static_cast<jsize>(sizeof(values) / sizeof(values[0]))) {
+    return env->NewIntArray(0);
+  }
+  for (jsize i = 0; i < output_size; ++i) {
+    values[i] = static_cast<jint>(spl_start[i]);
+  }
+  env->SetIntArrayRegion(output, 0, output_size, values);
+  return output;
+}
+
 JNIEXPORT jstring JNICALL
 Java_org_florisboard_libnative_PinyinDecoderKt_nativeGetPyStr(JNIEnv *env,
                                                               jclass) {

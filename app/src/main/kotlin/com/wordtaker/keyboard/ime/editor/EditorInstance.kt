@@ -34,6 +34,7 @@ import com.wordtaker.keyboard.ime.input.InputShiftState
 import com.wordtaker.keyboard.ime.keyboard.IncognitoMode
 import com.wordtaker.keyboard.ime.keyboard.KeyboardMode
 import com.wordtaker.keyboard.ime.nlp.SuggestionCandidate
+import com.wordtaker.keyboard.ime.nlp.pinyin.activePinyinCompositionSession
 import com.wordtaker.keyboard.ime.text.composing.Appender
 import com.wordtaker.keyboard.ime.text.composing.Composer
 import com.wordtaker.keyboard.ime.text.key.KeyVariation
@@ -63,6 +64,11 @@ class EditorInstance(context: Context) : AbstractEditorInstance(context) {
     val massSelection = MassSelectionState()
 
     private fun currentInputConnection() = FlorisImeService.currentInputConnection()
+
+    override fun handleStartInput(editorInfo: FlorisEditorInfo) {
+        nlpManager.resetPinyinCompositionSession()
+        super.handleStartInput(editorInfo)
+    }
 
     override fun handleStartInputView(editorInfo: FlorisEditorInfo, isRestart: Boolean) {
         if (!prefs.correction.rememberCapsLockState.get()) {
@@ -138,6 +144,9 @@ class EditorInstance(context: Context) : AbstractEditorInstance(context) {
     override fun handleSelectionUpdate(oldSelection: EditorRange, newSelection: EditorRange, composing: EditorRange) {
         autoSpace.setInactiveFromUpdate()
         phantomSpace.setInactiveFromUpdate()
+        if (oldSelection != newSelection && !expectsSelectionUpdate(newSelection, composing)) {
+            nlpManager.resetPinyinCompositionSession()
+        }
         if (massSelection.isActive) {
             super.handleMassSelectionUpdate(newSelection, composing)
         } else {
@@ -276,6 +285,12 @@ class EditorInstance(context: Context) : AbstractEditorInstance(context) {
                 updateLastCommitPosition()
             }
         }
+    }
+
+    override fun replaceComposingText(text: String): Boolean {
+        autoSpace.setInactive()
+        phantomSpace.setInactive()
+        return super.replaceComposingText(text)
     }
 
     /**
@@ -506,16 +521,18 @@ class EditorInstance(context: Context) : AbstractEditorInstance(context) {
     }
 
     fun tryPerformEnterCommitRaw(): Boolean {
-        if (!subtypeManager.activeSubtype.primaryLocale.language.startsWith("zh")) return false
-        if (activeContent.composing.length <= 0) return false
-        // Commit the first Hanzi candidate instead of the raw ASCII pinyin.
-        val firstCandidate = nlpManager.activeCandidates.firstOrNull()
-        return if (firstCandidate != null) {
-            commitCompletion(firstCandidate)
-        } else {
-            // No candidates yet; finalize the raw pinyin so Enter is not swallowed silently.
-            finalizeComposingText(activeContent.composingText)
-        }
+        val composing = activePinyinCompositionSession
+            .originalRawFor(activeContent.composingText)
+            ?: activeContent.composingText
+        val raw = rawCompositionForEnter(
+            primaryLanguage = subtypeManager.activeSubtype.primaryLocale.language,
+            composingText = composing,
+        ) ?: return false
+        // The return value reports that raw composing owned this Enter press. Even if the target
+        // editor rejects the commit, a visible-newline key must not also insert a newline.
+        nlpManager.resetPinyinCompositionSession()
+        finalizeComposingText(raw)
+        return true
     }
 
     /**
@@ -555,6 +572,7 @@ class EditorInstance(context: Context) : AbstractEditorInstance(context) {
     }
 
     override fun reset() {
+        nlpManager.resetPinyinCompositionSession()
         super.reset()
         autoSpace.setInactive()
         phantomSpace.setInactive()

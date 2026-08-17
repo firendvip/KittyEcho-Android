@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/score-report-v1.json",
+  "title": "KittyEcho anonymous score report v1",
+  "description": "No reference or hypothesis text is permitted. Runtime validation is stricter than this structural index.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "dataset_id", "model_alias", "normalization",
+    "evaluation_contract", "dataset_summary", "metrics", "groups",
+    "sentence_errors"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {"type": "string", "pattern": "^run_[0-9a-f]{12}$"},
+    "dataset_id": {"type": "string", "pattern": "^dataset_[0-9a-f]{12}$"},
+    "model_alias": {"type": "string", "pattern": "^M[0-9]{3}$"},
+    "normalization": {"type": "object"},
+    "evaluation_contract": {"type": "object"},
+    "dataset_summary": {"type": "object"},
+    "metrics": {"type": "object"},
+    "groups": {"type": "object"},
+    "sentence_errors": {"type": "array", "minItems": 1}
+  }
+}

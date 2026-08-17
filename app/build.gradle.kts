@@ -211,10 +211,15 @@ afterEvaluate {
         val taskName = "package${buildType.replaceFirstChar { it.uppercase() }}"
         tasks.findByName(taskName)?.doLast {
             val outDir = File(buildDir, "outputs/apk/$buildType")
-            outDir.listFiles { f -> f.extension == "apk" }?.forEach { apk ->
-                val dest = File(outDir, "KittyEcho-${projectVersionName}-${buildType}.apk")
-                if (apk.name != dest.name) apk.renameTo(dest)
-            }
+            val dest = File(outDir, "KittyEcho-${projectVersionName}-${buildType}.apk")
+            val sourceApks = outDir.listFiles { apk ->
+                apk.extension == "apk" &&
+                    apk != dest &&
+                    !apk.name.startsWith("KittyEcho-")
+            }.orEmpty()
+            val sourceApk = sourceApks.singleOrNull()
+                ?: error("Expected exactly one canonical APK in $outDir, found: ${sourceApks.map { it.name }}")
+            sourceApk.copyTo(dest, overwrite = true)
         }
     }
 }
@@ -264,6 +269,7 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.androidx.work.runtime)
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)

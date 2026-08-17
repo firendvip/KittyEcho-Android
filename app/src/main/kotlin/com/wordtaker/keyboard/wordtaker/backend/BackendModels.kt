@@ -31,7 +31,7 @@ class BackendException(
         code == CODE_DAILY_CAP_EXCEEDED -> "今日云端用量已达上限，明天再来吧"
         isAuthExpired -> "登录已过期，请重新登录"
         status != null && status >= 500 -> "服务器开小差了，请稍后再试"
-        else -> message ?: "请求失败，请稍后再试"
+        else -> "请求失败，请稍后再试"
     }
 
     companion object {

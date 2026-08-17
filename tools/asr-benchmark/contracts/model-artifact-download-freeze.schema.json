@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wordtaker.com/schemas/asr-benchmark/model-artifact-download-freeze-v1.json",
+  "title": "KittyEcho model artifact download freeze payload v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "receipt_contract_id",
+    "scope",
+    "registry_snapshot_sha256",
+    "model_id",
+    "model_revision",
+    "model_revision_kind",
+    "artifact",
+    "measurement"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f]{12}$"
+    },
+    "receipt_contract_id": {
+      "const": "model-artifact-download-freeze-v1"
+    },
+    "scope": {"const": "internal_evaluation_download_only"},
+    "registry_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+    "model_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_]{1,63}$"
+    },
+    "model_revision": {"type": "string", "minLength": 1},
+    "model_revision_kind": {
+      "enum": ["commit", "release_asset"]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filename",
+        "component",
+        "source_url",
+        "source_revision",
+        "source_revision_kind",
+        "registry_expected_bytes",
+        "registry_expected_sha256"
+      ],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "pattern": "^[^/\\\\]+$"
+        },
+        "component": {
+          "enum": ["weights", "conversion", "runtime", "tokenizer"]
+        },
+        "source_url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "source_revision": {"type": "string", "minLength": 1},
+        "source_revision_kind": {
+          "enum": ["commit", "release_asset"]
+        },
+        "registry_expected_bytes": {
+          "oneOf": [
+            {"type": "integer", "minimum": 1},
+            {"type": "null"}
+          ]
+        },
+        "registry_expected_sha256": {
+          "oneOf": [
+            {"$ref": "#/$defs/sha256"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "st_dev",
+        "st_ino",
+        "size_bytes",
+        "mode",
+        "nlink"
+      ],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "st_dev": {"type": "integer", "minimum": 0},
+        "st_ino": {"type": "integer", "minimum": 0},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "mode": {"type": "integer", "minimum": 0},
+        "nlink": {"const": 1}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

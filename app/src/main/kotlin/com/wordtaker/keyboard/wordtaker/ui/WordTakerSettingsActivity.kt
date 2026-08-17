@@ -36,9 +36,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.wordtaker.keyboard.app.FlorisPreferenceStore
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.settings.SettingsRepository
 import com.wordtaker.keyboard.wordtaker.settings.SettingsState
+import com.wordtaker.keyboard.wordtaker.speech.ParaformerModelSettingsSection
+import dev.patrickgold.jetpref.datastore.model.observeAsState
 import kotlinx.coroutines.launch
 
 /**
@@ -70,6 +73,8 @@ private fun WordTakerSettingsScreen(
 ) {
     val scope = rememberCoroutineScope()
     val state by repository.settings.collectAsStateWithLifecycle(initialValue = SettingsState())
+    val prefs by FlorisPreferenceStore
+    val keyboardHapticEnabled by prefs.inputFeedback.hapticEnabled.observeAsState()
 
     Scaffold(containerColor = MaterialTheme.colorScheme.background) { padding ->
         Column(
@@ -135,6 +140,13 @@ private fun WordTakerSettingsScreen(
 
                 Spacer(Modifier.height(20.dp))
 
+                SectionLabel("语音识别")
+                ParaformerModelSettingsSection(
+                    manager = AppGraph.paraformerModelManager,
+                )
+
+                Spacer(Modifier.height(20.dp))
+
                 // General.
                 SectionLabel("通用")
                 ToggleRow(
@@ -142,6 +154,15 @@ private fun WordTakerSettingsScreen(
                     subtitle = "录音/粘贴音效",
                     checked = state.tone,
                     onCheckedChange = { scope.launch { repository.setTone(it) } },
+                )
+                Spacer(Modifier.height(8.dp))
+                ToggleRow(
+                    title = "键盘震动反馈",
+                    subtitle = "按键时震动",
+                    checked = keyboardHapticEnabled,
+                    onCheckedChange = {
+                        scope.launch { prefs.inputFeedback.hapticEnabled.set(it) }
+                    },
                 )
                 Spacer(Modifier.height(8.dp))
                 ToggleRow(
@@ -236,9 +257,7 @@ const val ROLE_NORMAL = "normal"
 const val ROLE_GAOEQ = "gaoeq"
 const val ROLE_VIBECODING = "vibecoding"
 
-// Chinese keyboard style ids — must match the values persisted into
-// prefs.internal.selectedKeyboardStyle and mapped by Subtype.pinyinDefaultFor.
-// 全拼 = full-keyboard pinyin (QWERTY); 九宫格 = T9 nine-grid pinyin; 手写 = ink pad (Subtype.HANDWRITING_DEFAULT).
+// Product-selectable Chinese keyboard style ids. The internal handwriting engine remains
+// available to the IME implementation, but it is intentionally not exposed by settings.
 const val KEYBOARD_STYLE_QWERTY = "qwerty_pinyin"
 const val KEYBOARD_STYLE_T9 = "t9_pinyin"
-const val KEYBOARD_STYLE_HANDWRITING = "handwriting"

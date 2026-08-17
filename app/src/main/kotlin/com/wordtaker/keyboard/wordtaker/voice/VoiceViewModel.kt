@@ -4,15 +4,29 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.wordtaker.keyboard.wordtaker.audio.ToneController
+import com.wordtaker.keyboard.wordtaker.audio.VoiceToneFeedback
 import com.wordtaker.keyboard.wordtaker.history.HistoryRepository
+import com.wordtaker.keyboard.wordtaker.polish.PolishOutcomeKind
+import com.wordtaker.keyboard.wordtaker.polish.PolishResult
 import com.wordtaker.keyboard.wordtaker.polish.Polisher
-import com.wordtaker.keyboard.wordtaker.settings.SettingsRepository
+import com.wordtaker.keyboard.wordtaker.settings.SettingsSource
 import com.wordtaker.keyboard.wordtaker.settings.SettingsState
+import com.wordtaker.keyboard.wordtaker.speech.CaptureStartFailure
+import com.wordtaker.keyboard.wordtaker.speech.CaptureStartResult
 import com.wordtaker.keyboard.wordtaker.speech.MicPermissionRequiredException
+import com.wordtaker.keyboard.wordtaker.speech.AsrDecodeException
+import com.wordtaker.keyboard.wordtaker.speech.AsrFailureException
+import com.wordtaker.keyboard.wordtaker.speech.AsrInitializationException
+import com.wordtaker.keyboard.wordtaker.speech.AsrModelCorruptException
+import com.wordtaker.keyboard.wordtaker.speech.AsrModelMissingException
+import com.wordtaker.keyboard.wordtaker.speech.AsrOutOfMemoryException
+import com.wordtaker.keyboard.wordtaker.speech.AsrResult
 import com.wordtaker.keyboard.wordtaker.speech.ModelNotReadyException
+import com.wordtaker.keyboard.wordtaker.speech.PendingAsrResult
+import com.wordtaker.keyboard.wordtaker.speech.RecorderReadException
 import com.wordtaker.keyboard.wordtaker.speech.SpeechEngine
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -21,23 +35,30 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import kotlin.random.Random
 
-// Recognizing/Polishing/Success 已不在主流程使用（batch3-C：点击结束即回待机，
-// 处理在后台并行进行）；保留枚举值仅为兼容旧引用（CatVoiceOverlay 等）。
+// 录音结束后处理仍在后台并发；phase 只聚合当前录音、Success 与 FIFO 队首阶段，
+// 不阻止用户继续键入或开始下一段录音。
 enum class VoicePhase { Idle, Recording, Recognizing, Polishing, Success }
 
 /** One-shot events the UI must act on (launch permission / model-download flows). */
 enum class VoiceEvent { PermissionRequired, ModelRequired }
+
+enum class VoiceSegmentDiscardReason { PrivacyUnavailable, EditorSessionChanged }
+
+fun interface VoiceStartHaptic {
+    fun pulse()
+
+    companion object {
+        val NONE = VoiceStartHaptic { }
+    }
+}
 
 /** Immutable UI state for the voice panel. */
 data class VoiceUiState(
@@ -45,8 +66,17 @@ data class VoiceUiState(
     val recording: Boolean = false,
     val level: Float = 0f,
     val busy: Boolean = false,
+    val polishOutcome: PolishOutcomeKind? = null,
 ) {
     val isProcessing: Boolean get() = busy
+}
+
+data class VoiceCommit(
+    val text: String,
+    val editorSessionToken: Long,
+) {
+    fun belongsTo(editorSessionToken: Long): Boolean =
+        this.editorSessionToken == editorSessionToken
 }
 
 /**
@@ -64,8 +94,10 @@ class VoiceViewModel(
     private val speechEngine: SpeechEngine,
     private val polisher: Polisher,
     private val historyRepository: HistoryRepository,
-    private val settingsRepository: SettingsRepository,
-    private val toneController: ToneController,
+    private val settingsRepository: SettingsSource,
+    private val toneController: VoiceToneFeedback,
+    private val startHaptic: VoiceStartHaptic,
+    private val privacySource: VoicePrivacySource = VoicePrivacySource.STRICT,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(VoiceUiState())
@@ -77,68 +109,154 @@ class VoiceViewModel(
     // Emits the final (polished) text when a segment completes successfully.
     // The IME host collects this to commit the text into the focused input field.
     // 容量 16：多段并行时可能连续快速完成，收集方在主线程，防 tryEmit 丢文本。
-    private val _committed = MutableSharedFlow<String>(extraBufferCapacity = 16)
-    val committed: SharedFlow<String> = _committed.asSharedFlow()
+    private val _committed = MutableSharedFlow<VoiceCommit>(extraBufferCapacity = 16)
+    val committed: SharedFlow<VoiceCommit> = _committed.asSharedFlow()
 
     private val _event = MutableSharedFlow<VoiceEvent>(extraBufferCapacity = 1)
     val event: SharedFlow<VoiceEvent> = _event.asSharedFlow()
+
+    private val _discarded = MutableSharedFlow<VoiceSegmentDiscardReason>(extraBufferCapacity = 4)
+    val discarded: SharedFlow<VoiceSegmentDiscardReason> = _discarded.asSharedFlow()
 
     // 「有 N 段在处理」：从点击结束（开始收尾 flush）起计入，润色上屏完成后减一。
     // UI 用它画多猫/角标视觉反馈。
     private val _pending = MutableStateFlow(0)
     val pending: StateFlow<Int> = _pending.asStateFlow()
 
-    private val settings: StateFlow<SettingsState> = settingsRepository.settings
-        .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsState())
+    // Until DataStore has emitted successfully, cloud processing is fail-closed. A flow failure
+    // resets this snapshot to local-only instead of retaining a previously permissive value.
+    private val settings = MutableStateFlow(SettingsState(localRecognitionOnly = true))
+    @Volatile
+    private var settingsLoaded = false
 
     private var levelJob: Job? = null
 
-    // start/stop 串行化：引擎是单实例（单 recorder + 单解码 session），新段开麦必须等
-    // 上一段的本地 flush（engine.stop()）完成；收尾也必须等本段真正开麦之后。
-    // 两个 Job 都在主调度器上 launch，join 链保证 stop_i → start_{i+1} → stop_{i+1}。
+    private var recordingActive = false
+    private var recordingLevel = 0f
+
+    // Only capture open/release is serialized. Whole-utterance decode continues on the
+    // recognizer actor and never blocks the next recording from opening its microphone.
     private var startJob: Job? = null
-    private var stopJob: Job? = null
+    private var startRequested = false
+    private var captureReleaseJob: Job? = null
+    private var recordingGuard = SegmentPrivacyGuard.strict()
 
     // 本段是否真的开了麦（startJob 里 engine.start() 已执行）。cancel/收键盘只有在
     // 开了麦时才需要 engine.cancel()，避免打断上一段还在 flush 的 engine.stop()。
     @Volatile
     private var micOpen = false
 
-    /** 一段录音的提交任务：raw 原文 + 已并发启动的润色结果。 */
-    private class CommitJob(val raw: String, val polished: Deferred<String>)
+    /** 一段录音的提交任务：队列 id + raw 原文 + 已并发启动的润色/直出结果。 */
+    private class CommitJob(
+        val id: Long,
+        val raw: String,
+        val polished: Deferred<PolishResult>,
+        val guard: SegmentPrivacyGuard,
+    )
+
+    private data class RecognitionJob(
+        val id: Long,
+        val pending: PendingAsrResult,
+        val guard: SegmentPrivacyGuard,
+    )
+
+    private data class SegmentPrivacyGuard(
+        val editorSessionToken: Long,
+        val decision: VoicePrivacyDecision,
+        val privacyUnavailable: Boolean,
+        val editorSessionChanged: Boolean,
+    ) {
+        companion object {
+            fun strict() = SegmentPrivacyGuard(
+                editorSessionToken = VoicePrivacyContext.INVALID_SESSION_TOKEN,
+                decision = VoicePrivacyPolicy.decide(
+                    context = VoicePrivacyContext.STRICT,
+                    localRecognitionOnly = true,
+                ),
+                privacyUnavailable = true,
+                editorSessionChanged = false,
+            )
+        }
+    }
+
+    private data class SegmentProgress(
+        val id: Long,
+        var phase: VoicePhase,
+    )
 
     // FIFO 提交管线：润色各自并发跑（多只小猫并行干活），worker 按开始顺序 await
     // 逐条上屏（排队交卷），保证上屏顺序与录音开始顺序严格一致。
     private val commitQueue = Channel<CommitJob>(Channel.UNLIMITED)
+    private val recognitionQueue = Channel<RecognitionJob>(Channel.UNLIMITED)
+    private val segmentProgress = ArrayDeque<SegmentProgress>()
+    private var nextSegmentId = 0L
+    private var successVisible = false
+    private var completionOutcome: PolishOutcomeKind? = null
+    private var successJob: Job? = null
 
     init {
         viewModelScope.launch {
+            settingsRepository.settings
+                .catch {
+                    settingsLoaded = false
+                    settings.value = SettingsState(localRecognitionOnly = true)
+                    Log.i(TAG, "settings unavailable; cloud disabled")
+                }
+                .collect {
+                    settings.value = it
+                    settingsLoaded = true
+                }
+        }
+        viewModelScope.launch {
+            for (job in recognitionQueue) {
+                recognizeAndQueueCommit(job)
+            }
+        }
+        viewModelScope.launch {
             for (job in commitQueue) {
                 try {
-                    val text = job.polished.await()
+                    val result = job.polished.await()
+                    val output = result.text
+                    val commitGuard = refreshPrivacyGuard(job.guard)
+                    val discardReason = commitGuard.discardReason()
+                    if (discardReason != null) {
+                        discardForPrivacy(job.id, discardReason)
+                        continue
+                    }
                     // Commit FIRST (non-suspending tryEmit) so text is emitted even if
                     // the viewModelScope is cancelled before historyRepository.add completes.
-                    _committed.tryEmit(text)
-                    Log.i(TAG, "commit emitted: ${text.length} chars")
-                    runCatching { historyRepository.add(job.raw, text) }
-                        .onSuccess { Log.d(TAG, "history: written") }
-                        .onFailure { Log.i(TAG, "history: write failed: ${it.message}") }
-                    if (!settings.value.minimal) {
-                        _toast.value = "已写入历史"
+                    _committed.tryEmit(
+                        VoiceCommit(
+                            text = output,
+                            editorSessionToken = commitGuard.editorSessionToken,
+                        ),
+                    )
+                    Log.i(TAG, "commit emitted: ${output.length} chars")
+                    finishProcessingWithSuccess(job.id, result.outcome)
+                    val historyGuard = refreshPrivacyGuard(commitGuard)
+                    if (
+                        historyGuard.discardReason() == null &&
+                        historyGuard.decision.saveHistory
+                    ) {
+                        runCatching { historyRepository.add(job.raw, output, result.outcome) }
+                            .onSuccess { Log.d(TAG, "history: written") }
+                            .onFailure { Log.i(TAG, "history: write failed") }
+                        if (!settings.value.minimal) {
+                            _toast.value = "已写入历史"
+                        }
                     }
-                } finally {
-                    _pending.update { (it - 1).coerceAtLeast(0) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.i(TAG, "commit: failed")
+                    discardProcessing(job.id)
                 }
             }
         }
     }
 
     fun onTap() {
-        when (_state.value.phase) {
-            VoicePhase.Idle -> startRecording()
-            VoicePhase.Recording -> finishSegment()
-            else -> Unit
-        }
+        if (recordingActive) finishSegment() else startRecording()
     }
 
     /**
@@ -146,23 +264,35 @@ class VoiceViewModel(
      * 不写历史）。已在队列中处理的段不受影响，会继续完成上屏。
      */
     fun cancel() {
-        if (_state.value.phase != VoicePhase.Recording) return
+        if (!recordingActive && !startRequested) return
         levelJob?.cancel()
         levelJob = null
-        if (micOpen) runCatching { speechEngine.cancel() }
+        if (startRequested && !recordingActive) {
+            startRequested = false
+            startJob?.cancel()
+            playEndTone()
+            refreshUiState()
+            return
+        }
+        val captureClosed = if (micOpen) {
+            runCatching { speechEngine.cancel() }.isSuccess
+        } else {
+            true
+        }
         micOpen = false
-        val toneOn = settings.value.tone
-        toneController.endBeep(toneOn, settings.value.toneStyle, toneVolume())
-        _state.value = VoiceUiState()
-        Log.d(TAG, "cancel: current segment discarded, reset to Idle")
+        if (captureClosed) playEndTone()
+        recordingActive = false
+        recordingLevel = 0f
+        refreshUiState()
+        Log.d(TAG, "cancel: current segment discarded")
     }
 
     /**
      * External entry point (toolbar voice icon / long-press space / CAT_VOICE key):
-     * starts recording when idle; never ends one.
+     * starts recording whenever no segment is currently recording; never ends one.
      */
     fun startFromExternal() {
-        if (_state.value.phase == VoicePhase.Idle) {
+        if (!recordingActive) {
             startRecording()
         }
     }
@@ -175,132 +305,405 @@ class VoiceViewModel(
      * 不受影响（worker 继续跑，队列中的段照常完成上屏）。
      */
     fun stopRecordingAndEndTone() {
-        if (_state.value.phase != VoicePhase.Recording) return
+        if (!recordingActive && !startRequested) return
         levelJob?.cancel()
         levelJob = null
-        val toneOn = settings.value.tone
-        toneController.endBeep(toneOn, settings.value.toneStyle, toneVolume())
-        if (micOpen) runCatching { speechEngine.cancel() }
+        if (startRequested && !recordingActive) {
+            startRequested = false
+            startJob?.cancel()
+            playEndTone()
+            refreshUiState()
+            return
+        }
+        val captureClosed = if (micOpen) {
+            runCatching { speechEngine.cancel() }.isSuccess
+        } else {
+            true
+        }
         micOpen = false
-        _state.value = VoiceUiState()
-        Log.d(TAG, "stopRecordingAndEndTone: discarded recording, reset to Idle")
+        if (captureClosed) playEndTone()
+        recordingActive = false
+        recordingLevel = 0f
+        refreshUiState()
+        Log.d(TAG, "stopRecordingAndEndTone: discarded recording")
     }
 
-    /** 语音提示音音量系数 0..1（用户滑杆，仅作用于喵叫/开始/结束音）。 */
+    private fun playEndTone() {
+        val current = settings.value
+        runCatching {
+            toneController.endBeep(current.tone, current.toneStyle, toneVolume())
+        }.onFailure {
+            Log.i(TAG, "end tone failed")
+        }
+    }
+
+    /** 语音提示音音量系数 0..1（用户滑杆，仅作用于结束喵叫）。 */
     private fun toneVolume(): Float = settings.value.toneVolume / 100f
 
+    private fun beginProcessing(): Long {
+        val id = nextSegmentId++
+        segmentProgress.addLast(SegmentProgress(id, VoicePhase.Recognizing))
+        _pending.value = segmentProgress.size
+        refreshUiState()
+        return id
+    }
+
+    private fun updateProcessingPhase(id: Long, phase: VoicePhase) {
+        segmentProgress.firstOrNull { it.id == id }?.phase = phase
+        refreshUiState()
+    }
+
+    private fun discardProcessing(id: Long) {
+        segmentProgress.removeAll { it.id == id }
+        _pending.value = segmentProgress.size
+        refreshUiState()
+    }
+
+    private fun finishProcessingWithSuccess(id: Long, outcome: PolishOutcomeKind) {
+        segmentProgress.removeAll { it.id == id }
+        _pending.value = segmentProgress.size
+        completionOutcome = outcome
+        successVisible = true
+        refreshUiState()
+
+        successJob?.cancel()
+        successJob = viewModelScope.launch {
+            delay(SUCCESS_DURATION_MS)
+            successVisible = false
+            completionOutcome = null
+            refreshUiState()
+        }
+    }
+
+    private fun refreshUiState() {
+        val phase = when {
+            recordingActive -> VoicePhase.Recording
+            successVisible -> VoicePhase.Success
+            else -> segmentProgress.firstOrNull()?.phase ?: VoicePhase.Idle
+        }
+        _state.value = VoiceUiState(
+            phase = phase,
+            recording = recordingActive,
+            level = if (recordingActive) recordingLevel else 0f,
+            busy = phase == VoicePhase.Recognizing || phase == VoicePhase.Polishing,
+            polishOutcome = completionOutcome.takeIf { phase == VoicePhase.Success },
+        )
+    }
+
     /** 润色一段原文；失败/超时回退原文。 */
-    private suspend fun polishOrFallback(raw: String): String {
+    private suspend fun polishOrFallback(raw: String): PolishResult {
         val role = settings.value.role
         return try {
-            withTimeout(POLISH_TIMEOUT_MS) { polisher.polish(raw, role) }
-                .also { Log.i(TAG, "polish: success") }
+            withTimeout(POLISH_TIMEOUT_MS) { polisher.polishResult(raw, role) }
+                .also { Log.i(TAG, "polish: completed outcome=${it.outcome.name}") }
         } catch (e: CancellationException) {
             if (e is kotlinx.coroutines.TimeoutCancellationException) {
                 Log.i(TAG, "polish: timeout after ${POLISH_TIMEOUT_MS}ms, falling back to raw")
-                raw
+                PolishResult(raw, PolishOutcomeKind.FallbackTimeout)
             } else {
                 throw e  // true scope cancellation — propagate
             }
         } catch (e: Exception) {
-            Log.i(TAG, "polish: failure (${e.message}), falling back to raw")
-            raw
+            Log.i(TAG, "polish: unexpected failure, falling back to raw")
+            PolishResult(raw, PolishOutcomeKind.FallbackUnknown)
         }
+    }
+
+    /** Consume first-layer finals in FIFO; only a successful final may enter layer two. */
+    private suspend fun recognizeAndQueueCommit(job: RecognitionJob) {
+        val asr: AsrResult = try {
+            job.pending.await()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: AsrFailureException) {
+            handleAsrFailure(job.id, error)
+            return
+        } catch (_: Exception) {
+            handleAsrFailure(job.id, AsrDecodeException())
+            return
+        }
+        val prepared = TranscriptText.prepare(asr.text)
+        Log.d(
+            TAG,
+            "ASR final: ${prepared.visibleGraphemeCount} graphemes model=${asr.modelId}",
+        )
+        if (prepared.visibleGraphemeCount == 0) {
+            _toast.value = "未识别到语音"
+            discardProcessing(job.id)
+            return
+        }
+
+        val guard = refreshPrivacyGuard(job.guard)
+        val discardReason = guard.discardReason()
+        if (discardReason != null) {
+            discardForPrivacy(job.id, discardReason)
+            return
+        }
+        val exceedsLocalDirectThreshold =
+            prepared.visibleGraphemeCount > LOCAL_DIRECT_MAX_GRAPHEMES
+        val polishAvailable = guard.decision.allowCloudPolish && exceedsLocalDirectThreshold &&
+            runCatching { polisher.isAvailable() }
+                .onFailure { Log.i(TAG, "polish availability failed") }
+                .getOrDefault(false)
+        val result = when {
+            !exceedsLocalDirectThreshold -> CompletableDeferred(
+                PolishResult(prepared.text, PolishOutcomeKind.ShortDirect),
+            )
+            polishAvailable -> {
+                updateProcessingPhase(job.id, VoicePhase.Polishing)
+                viewModelScope.async { polishOrFallback(prepared.text) }
+            }
+            else -> CompletableDeferred(
+                PolishResult(prepared.text, PolishOutcomeKind.OfflineDirect),
+            )
+        }
+        if (
+            commitQueue.trySend(
+                CommitJob(job.id, prepared.text, result, guard),
+            ).isFailure
+        ) {
+            result.cancel()
+            discardProcessing(job.id)
+        }
+    }
+
+    private fun handleAsrFailure(id: Long, error: AsrFailureException) {
+        when (error) {
+            is AsrModelMissingException,
+            is AsrModelCorruptException,
+            is AsrInitializationException,
+            is AsrOutOfMemoryException,
+            -> {
+                _event.tryEmit(VoiceEvent.ModelRequired)
+                _toast.value = when (error) {
+                    is AsrModelMissingException -> "缺少本地语音模型"
+                    is AsrModelCorruptException -> "本地语音模型校验失败"
+                    is AsrOutOfMemoryException -> "设备内存不足，语音模型无法运行"
+                    else -> "本地语音模型初始化失败"
+                }
+            }
+            else -> _toast.value = "语音识别失败"
+        }
+        Log.i(TAG, "ASR failed: ${error::class.simpleName}")
+        discardProcessing(id)
+    }
+
+    private fun effectiveLocalRecognitionOnly(): Boolean =
+        !settingsLoaded || settings.value.localRecognitionOnly
+
+    private fun readPrivacyContext(): VoicePrivacyContext =
+        runCatching { privacySource.current() }
+            .getOrElse {
+                Log.i(TAG, "privacy source unavailable; strict policy applied")
+                VoicePrivacyContext.STRICT
+            }
+
+    private fun startPrivacyGuard(): SegmentPrivacyGuard {
+        val context = readPrivacyContext()
+        return SegmentPrivacyGuard(
+            editorSessionToken = context.editorSessionToken,
+            decision = VoicePrivacyPolicy.decide(
+                context = context,
+                localRecognitionOnly = effectiveLocalRecognitionOnly(),
+            ),
+            privacyUnavailable = !context.hasVerifiedEditor,
+            editorSessionChanged = false,
+        )
+    }
+
+    private fun refreshPrivacyGuard(previous: SegmentPrivacyGuard): SegmentPrivacyGuard {
+        val context = readPrivacyContext()
+        val currentDecision = VoicePrivacyPolicy.decide(
+            context = context,
+            localRecognitionOnly = effectiveLocalRecognitionOnly(),
+        )
+        val unavailable = previous.privacyUnavailable || !context.hasVerifiedEditor
+        val sessionChanged = previous.editorSessionChanged || (
+            !unavailable && context.editorSessionToken != previous.editorSessionToken
+        )
+        return previous.copy(
+            decision = previous.decision.restrictWith(currentDecision),
+            privacyUnavailable = unavailable,
+            editorSessionChanged = sessionChanged,
+        )
+    }
+
+    private fun SegmentPrivacyGuard.discardReason(): VoiceSegmentDiscardReason? = when {
+        editorSessionChanged -> VoiceSegmentDiscardReason.EditorSessionChanged
+        privacyUnavailable -> VoiceSegmentDiscardReason.PrivacyUnavailable
+        else -> null
+    }
+
+    private fun discardForPrivacy(id: Long, reason: VoiceSegmentDiscardReason) {
+        _discarded.tryEmit(reason)
+        _toast.value = when (reason) {
+            VoiceSegmentDiscardReason.EditorSessionChanged -> "输入框已切换，语音内容已丢弃"
+            VoiceSegmentDiscardReason.PrivacyUnavailable -> "无法确认输入框隐私状态，语音内容已丢弃"
+        }
+        Log.i(TAG, "segment discarded: ${reason.name}")
+        discardProcessing(id)
     }
 
     private fun startRecording() {
-        // D-1: engine.start() silently no-ops when the bundled model hasn't finished
-        // copying yet; pre-flight so the tap gets an immediate, honest response.
+        // Pre-flight before permission or AudioRecord work so an unavailable runtime model
+        // produces the download/repair UI without opening or buffering microphone PCM.
         if (!speechEngine.isReady()) {
-            _toast.value = "语音正在准备，请稍候"
-            Log.d(TAG, "startRecording: engine not ready yet, showed hint")
+            when (val failure = speechEngine.readinessFailure()) {
+                is AsrModelMissingException -> {
+                    _event.tryEmit(VoiceEvent.ModelRequired)
+                    _toast.value = "缺少本地语音模型"
+                }
+                is AsrModelCorruptException -> {
+                    _event.tryEmit(VoiceEvent.ModelRequired)
+                    _toast.value = "本地语音模型校验失败"
+                }
+                is AsrInitializationException -> {
+                    _event.tryEmit(VoiceEvent.ModelRequired)
+                    _toast.value = "本地语音模型初始化失败"
+                }
+                is AsrOutOfMemoryException -> {
+                    _event.tryEmit(VoiceEvent.ModelRequired)
+                    _toast.value = "设备内存不足，语音模型无法运行"
+                }
+                else -> _toast.value = "语音正在准备，请稍候"
+            }
+            Log.d(TAG, "startRecording: engine not ready")
             return
         }
-        // UI 立即进入录音态（防双击重入）；真正开麦在 startJob 里等上一段 flush 完。
-        _state.value = VoiceUiState(
-            phase = VoicePhase.Recording,
-            recording = true,
-            level = INITIAL_LEVEL,
-            busy = false,
-        )
-        Log.d(TAG, "startRecording: phase=Recording")
-        levelJob?.cancel()
-        levelJob = viewModelScope.launch {
-            while (isActive) {
-                delay(LEVEL_TICK_MS)
-                _state.value = _state.value.copy(
-                    level = BASE_LEVEL + Random.nextFloat() * LEVEL_SWING,
-                )
-            }
-        }
-        val priorStop = stopJob
+        if (recordingActive || startRequested) return
+        // Capture is not visible as Recording until the typed start result confirms success.
+        // startRequested is the re-entry guard while a prior segment releases its microphone.
+        startRequested = true
+        recordingLevel = 0f
+        recordingGuard = startPrivacyGuard()
+        refreshUiState()
+        val priorRelease = captureReleaseJob
         startJob = viewModelScope.launch {
-            priorStop?.join()
-            // 等待期间被取消/收键盘（phase 已复位）→ 放弃开麦，避免幽灵录音。
-            if (_state.value.phase != VoicePhase.Recording) {
-                Log.d(TAG, "startRecording: aborted before mic open (phase reset)")
+            priorRelease?.join()
+            // Waiting may be cancelled by the user/lifecycle; never open a ghost capture.
+            if (!startRequested) {
+                Log.d(TAG, "startRecording: aborted before mic open")
                 return@launch
             }
-            val toneOn = settings.value.tone
-            // 顺序敏感（真机 vivo iQOO 8 实测得出，勿改回）：
-            // 1) 先开麦克风再播提示音——提示音输出流启动若与录音通路建立同时发生，
-            //    audioserver 会让 AudioRecord 首帧延迟数秒、句首被吞（原「前切」bug）。
-            // 2) 提示音在开麦后播放会被自己的麦克风录进（解码成垃圾字、其后停顿提前触发
-            //    endpoint），故让引擎丢弃录音开头的提示音窗口（TONE_GUARD_MS）。
-            // R3-011：提示音关闭时句首被吞已由采集音源改为 VOICE_COMMUNICATION 修复
-            // （见 PcmRecorder 音源注释），无需任何声学预热；关提示音 = 全程无声。
-            speechEngine.start(if (toneOn) TONE_GUARD_MS else 0L)
-            micOpen = true
-            toneController.startBeep(toneOn, settings.value.toneStyle, toneVolume())
+            val result = try {
+                speechEngine.start()
+            } catch (error: Throwable) {
+                CaptureStartResult.Failed(CaptureStartFailure.RecorderStartFailed(error))
+            }
+            when (result) {
+                CaptureStartResult.Started -> {
+                    micOpen = true
+                    recordingActive = true
+                    startRequested = false
+                    refreshUiState()
+                    Log.d(TAG, "startRecording: phase=Recording")
+                    levelJob?.cancel()
+                    levelJob = viewModelScope.launch {
+                        while (isActive) {
+                            delay(LEVEL_TICK_MS)
+                            recordingLevel = speechEngine.currentLevel().coerceIn(0f, 1f)
+                            refreshUiState()
+                        }
+                    }
+                    runCatching { startHaptic.pulse() }
+                        .onFailure { Log.i(TAG, "start haptic failed") }
+                }
+                is CaptureStartResult.Failed -> {
+                    startRequested = false
+                    recordingActive = false
+                    micOpen = false
+                    handleCaptureStartFailure(result.failure)
+                    refreshUiState()
+                }
+            }
         }
     }
 
+    private fun handleCaptureStartFailure(failure: CaptureStartFailure) {
+        when (failure) {
+            CaptureStartFailure.PermissionDenied -> {
+                _event.tryEmit(VoiceEvent.PermissionRequired)
+                _toast.value = "需要麦克风权限"
+            }
+            is CaptureStartFailure.ModelNotReady -> {
+                _event.tryEmit(VoiceEvent.ModelRequired)
+                _toast.value = when (failure.failure) {
+                    is AsrModelMissingException -> "缺少本地语音模型"
+                    is AsrModelCorruptException -> "本地语音模型校验失败"
+                    is AsrOutOfMemoryException -> "设备内存不足，语音模型无法运行"
+                    is AsrInitializationException -> "本地语音模型初始化失败"
+                    else -> "语音模型正在准备，请稍候"
+                }
+            }
+            is CaptureStartFailure.RecorderStartFailed -> _toast.value = "无法启动录音"
+        }
+        Log.i(TAG, "capture start failed: ${failure::class.simpleName}")
+    }
+
     /**
-     * 点击结束：立即回待机（可马上开新段），当前段在后台收尾 —— engine.stop()
+     * 点击结束：立即释放当前录音交互（可马上开新段），当前段在后台收尾 —— engine.stop()
      * 本地 flush 出「攒段 + 尾巴」整段文本，随即并发启动润色并入 FIFO 队列。
      */
     private fun finishSegment() {
         levelJob?.cancel()
         levelJob = null
-        val toneOn = settings.value.tone
-        toneController.endBeep(toneOn, settings.value.toneStyle, toneVolume())
-        _state.value = VoiceUiState()
+        recordingActive = false
+        recordingLevel = 0f
         micOpen = false
-        _pending.update { it + 1 }
-        Log.d(TAG, "finishSegment: back to Idle, flushing segment in background")
+        val segmentId = beginProcessing()
+        Log.d(TAG, "finishSegment: flushing segment in background")
         val priorStart = startJob
-        stopJob = viewModelScope.launch {
+        val guard = refreshPrivacyGuard(recordingGuard)
+        captureReleaseJob = viewModelScope.launch {
             priorStart?.join()
-            val raw: String = try {
-                speechEngine.stop()
+            var captureClosed = false
+            val pending: PendingAsrResult = try {
+                speechEngine.stopCapture().also { captureClosed = true }
             } catch (e: CancellationException) {
+                captureClosed = runCatching { speechEngine.cancel() }.isSuccess
                 throw e  // scope teardown — propagate
             } catch (e: MicPermissionRequiredException) {
+                captureClosed = runCatching { speechEngine.cancel() }.isSuccess
                 Log.i(TAG, "ASR: MicPermissionRequired")
                 _event.tryEmit(VoiceEvent.PermissionRequired)
                 _toast.value = "需要麦克风权限"
-                _pending.update { (it - 1).coerceAtLeast(0) }
+                discardProcessing(segmentId)
                 return@launch
             } catch (e: ModelNotReadyException) {
+                captureClosed = runCatching { speechEngine.cancel() }.isSuccess
                 Log.i(TAG, "ASR: ModelNotReady")
                 _event.tryEmit(VoiceEvent.ModelRequired)
                 _toast.value = "语音模型正在准备，请稍候"
-                _pending.update { (it - 1).coerceAtLeast(0) }
+                discardProcessing(segmentId)
+                return@launch
+            } catch (e: RecorderReadException) {
+                captureClosed = runCatching { speechEngine.cancel() }.isSuccess
+                Log.i(TAG, "ASR: capture read failed")
+                _toast.value = "录音读取失败"
+                discardProcessing(segmentId)
                 return@launch
             } catch (e: Exception) {
-                Log.i(TAG, "ASR: exception ignored, treating as empty: ${e.message}")
-                ""
-            }
-            val trimmed = raw.trim()
-            Log.d(TAG, "ASR result: ${trimmed.length} chars")
-            if (trimmed.isBlank()) {
-                _toast.value = "未识别到语音"
-                _pending.update { (it - 1).coerceAtLeast(0) }
+                captureClosed = runCatching { speechEngine.cancel() }.isSuccess
+                Log.i(TAG, "ASR: capture stop failed")
+                _toast.value = "录音停止失败"
+                discardProcessing(segmentId)
                 return@launch
+            } finally {
+                // A successful stop freezes/drains PCM and closes AudioRecord. If stop fails,
+                // cancel is the close fallback; never play into a capture that might remain open.
+                if (captureClosed) playEndTone()
             }
-            // 润色即刻并发启动（多段并行干活）；FIFO worker 按开始顺序 await 上屏。
-            val polishing = viewModelScope.async { polishOrFallback(trimmed) }
-            commitQueue.trySend(CommitJob(trimmed, polishing))
+            if (
+                recognitionQueue.trySend(
+                    RecognitionJob(
+                        id = segmentId,
+                        pending = pending,
+                        guard = guard,
+                    ),
+                ).isFailure
+            ) {
+                discardProcessing(segmentId)
+            }
         }
     }
 
@@ -310,7 +713,7 @@ class VoiceViewModel(
 
     override fun onCleared() {
         levelJob?.cancel()
-        // stopRecordingAndEndTone is a no-op if phase != Recording. viewModelScope
+        // stopRecordingAndEndTone is a no-op if there is no active recording. viewModelScope
         // cancellation aborts in-flight polish jobs; already-committed text was
         // emitted via non-suspending tryEmit so it is not lost.
         stopRecordingAndEndTone()
@@ -322,13 +725,21 @@ class VoiceViewModel(
         private val speechEngine: SpeechEngine,
         private val polisher: Polisher,
         private val historyRepository: HistoryRepository,
-        private val settingsRepository: SettingsRepository,
-        private val toneController: ToneController,
+        private val settingsRepository: SettingsSource,
+        private val toneController: VoiceToneFeedback,
+        private val startHaptic: VoiceStartHaptic,
+        private val privacySource: VoicePrivacySource = VoicePrivacySource.STRICT,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             return VoiceViewModel(
-                speechEngine, polisher, historyRepository, settingsRepository, toneController,
+                speechEngine,
+                polisher,
+                historyRepository,
+                settingsRepository,
+                toneController,
+                startHaptic,
+                privacySource,
             ) as T
         }
     }
@@ -336,19 +747,9 @@ class VoiceViewModel(
     private companion object {
         const val TAG = "VoiceVM"
         const val LEVEL_TICK_MS = 140L
-        const val INITIAL_LEVEL = 0.6f
-        const val BASE_LEVEL = 0.3f
-        const val LEVEL_SWING = 0.6f
         const val POLISH_TIMEOUT_MS = 10_000L
+        const val LOCAL_DIRECT_MAX_GRAPHEMES = 6
+        const val SUCCESS_DURATION_MS = 1_200L
 
-        /**
-         * 录音开头丢弃窗口：覆盖起始喵叫（meow.mp3 ≈0.55s，开麦后立即播放，在已捕获
-         * 音频的时间轴上约占 0.05–0.75s，含 ±0.1s 播放启动抖动）。用户以喵叫为
-         * 「开始说话」提示（喵叫约在点击后 0.9s 听完），正常不会在此窗口内开口，
-         * 丢弃不伤真实语音。真机（vivo iQOO 8）多轮标定：600ms 必漏（喵叫尾巴解码成
-         * 「什么」且提前触发 endpoint 截断整句）；700ms 偶漏（抖动时尾巴解码成「嗯/所」
-         * 垃圾前缀）；850ms 全覆盖。勿改小；改大会削掉抢跑说话者的句首字。
-         */
-        const val TONE_GUARD_MS = 850L
     }
 }

@@ -24,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import com.wordtaker.keyboard.app.FlorisPreferenceStore
@@ -33,6 +34,9 @@ import com.wordtaker.keyboard.themeManager
 import dev.patrickgold.jetpref.datastore.model.collectAsState
 import com.wordtaker.lib.snygg.ui.ProvideSnyggTheme
 import com.wordtaker.lib.snygg.ui.rememberSnyggTheme
+
+/** Whether the stylesheet currently rendered by [FlorisImeTheme] is a night theme. */
+val LocalFlorisImeThemeIsNight = staticCompositionLocalOf { false }
 
 @Composable
 fun FlorisImeTheme(content: @Composable () -> Unit) {
@@ -63,6 +67,7 @@ fun FlorisImeTheme(content: @Composable () -> Unit) {
     MaterialTheme {
         CompositionLocalProvider(
             LocalTextStyle provides TextStyle.Default,
+            LocalFlorisImeThemeIsNight provides activeThemeInfo.config.isNightTheme,
         ) {
             ProvideSnyggTheme(
                 snyggTheme = snyggTheme,

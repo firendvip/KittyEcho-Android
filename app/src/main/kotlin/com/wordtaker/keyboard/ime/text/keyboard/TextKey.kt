@@ -28,6 +28,7 @@ import com.wordtaker.keyboard.ime.popup.MutablePopupSet
 import com.wordtaker.keyboard.ime.popup.PopupMapping
 import com.wordtaker.keyboard.ime.popup.PopupSet
 import com.wordtaker.keyboard.ime.text.key.KeyCode
+import com.wordtaker.keyboard.wordtaker.ui.DoubaoImeSkin
 import com.wordtaker.keyboard.ime.text.key.KeyType
 import com.wordtaker.keyboard.ime.text.key.KeyVariation
 import com.wordtaker.keyboard.lib.lowercase
@@ -162,11 +163,11 @@ class TextKey(override val data: AbstractKeyData) : Key(data) {
                 }
                 else -> when (computed.code) {
                     KeyCode.SHIFT,
-                    KeyCode.DELETE -> 1.56f
+                    KeyCode.DELETE -> DoubaoImeSkin.edgeActionKeyWidthFactor
                     KeyCode.VIEW_CHARACTERS,
                     KeyCode.VIEW_SYMBOLS,
                     KeyCode.VIEW_SYMBOLS2,
-                    KeyCode.ENTER -> 1.56f
+                    KeyCode.ENTER -> DoubaoImeSkin.bottomActionKeyWidthFactor
                     else -> 1.00f
                 }
             }

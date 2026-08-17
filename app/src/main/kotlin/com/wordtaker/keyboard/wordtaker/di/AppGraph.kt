@@ -8,31 +8,32 @@ import com.wordtaker.keyboard.wordtaker.backend.DeviceIdentity
 import com.wordtaker.keyboard.wordtaker.backend.TokenStore
 import com.wordtaker.keyboard.wordtaker.history.HistoryDatabase
 import com.wordtaker.keyboard.wordtaker.history.HistoryRepository
+import com.wordtaker.keyboard.wordtaker.network.AndroidActiveNetworkStateReader
+import com.wordtaker.keyboard.wordtaker.network.InternetConnection
+import com.wordtaker.keyboard.wordtaker.network.ValidatedInternetConnection
+import com.wordtaker.keyboard.wordtaker.polish.OnlineOnlyPolisher
 import com.wordtaker.keyboard.wordtaker.polish.Polisher
 import com.wordtaker.keyboard.wordtaker.polish.RealPolisher
-import com.wordtaker.keyboard.wordtaker.relay.RelayClient
 import com.wordtaker.keyboard.wordtaker.settings.SettingsRepository
-import com.wordtaker.keyboard.wordtaker.speech.MockSpeechEngine
 import com.wordtaker.keyboard.wordtaker.speech.RealSpeechEngine
 import com.wordtaker.keyboard.wordtaker.speech.SpeechEngine
-import java.util.UUID
+import com.wordtaker.keyboard.wordtaker.speech.ParaformerAndroidModelStateStore
+import com.wordtaker.keyboard.wordtaker.speech.ParaformerAndroidPartialStore
+import com.wordtaker.keyboard.wordtaker.speech.ParaformerModelManager
+import com.wordtaker.keyboard.wordtaker.speech.ParaformerWorkManagerScheduler
 
 /**
  * Minimal manual dependency container (no Hilt). Holds process-wide singletons
  * constructed lazily from an application [Context].
  *
  * Engine wiring:
- *  - ASR     -> RealSpeechEngine (sherpa-onnx streaming Zipformer, on-device) when
- *               [USE_REAL_ASR] is true; falls back to MockSpeechEngine otherwise.
- *  - Polish  -> RealPolisher(RelayClient)  [real relay]
+ *  - ASR     -> RealSpeechEngine (whole-utterance Paraformer, on-device, fail closed)
+ *  - Polish  -> validated-network gate -> RealPolisher(billing backend only)
  *  - History -> Room repository            [real, 入库]
  *  - Settings-> SettingsRepository (DataStore) [real]
  *  - Tone    -> ToneController             [real]
  */
 object AppGraph {
-
-    /** Flip to false to fall back to the mock transcript engine for debugging. */
-    private const val USE_REAL_ASR = true
 
     private val appContextRef = java.util.concurrent.atomic.AtomicReference<Context?>(null)
 
@@ -53,9 +54,18 @@ object AppGraph {
 
     val toneController: ToneController by lazy { ToneController(requireContext()) }
 
-    // ASR: real on-device sherpa-onnx streaming Zipformer; mock as a debug fallback.
+    // ASR has no production fallback: model absence/corruption is a typed user-visible failure.
     val speechEngine: SpeechEngine by lazy {
-        if (USE_REAL_ASR) RealSpeechEngine(requireContext()) else MockSpeechEngine()
+        RealSpeechEngine(requireContext())
+    }
+
+    internal val paraformerModelManager: ParaformerModelManager by lazy {
+        ParaformerModelManager(
+            modelReady = { speechEngine.isReady() },
+            stateStore = ParaformerAndroidModelStateStore(requireContext()),
+            workScheduler = ParaformerWorkManagerScheduler(requireContext()),
+            partialStore = ParaformerAndroidPartialStore(requireContext()),
+        )
     }
 
     // Backend billing/auth stack (阶段3): token store + API client + account repo.
@@ -72,22 +82,18 @@ object AppGraph {
         AccountRepository(backendClient, tokenStore)
     }
 
-    // Polish: billing backend first, legacy relay as graceful fallback.
-    val polisher: Polisher by lazy {
-        RealPolisher(
-            backend = backendClient,
-            relay = RelayClient(deviceId()),
-            onAuthExpired = { tokenStore.clear() },
-        )
+    val internetConnection: InternetConnection by lazy {
+        ValidatedInternetConnection(AndroidActiveNetworkStateReader(requireContext()))
     }
 
-    /** Stable per-install device id, persisted in a small SharedPreferences file. */
-    private fun deviceId(): String {
-        val prefs = requireContext().getSharedPreferences("wt_device", Context.MODE_PRIVATE)
-        val existing = prefs.getString("device_id", null)
-        if (existing != null) return existing
-        val generated = UUID.randomUUID().toString()
-        prefs.edit().putString("device_id", generated).apply()
-        return generated
+    // Offline returns raw locally. Online uses the billing backend as the only cloud boundary.
+    val polisher: Polisher by lazy {
+        OnlineOnlyPolisher(
+            internetConnection = internetConnection,
+            onlineDelegate = RealPolisher(
+                backend = backendClient,
+                onAuthExpired = { accountRepository.invalidateAuthentication() },
+            ),
+        )
     }
 }

@@ -30,18 +30,14 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.absoluteOffset
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
@@ -78,14 +75,13 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.takeOrElse
 import androidx.compose.ui.unit.toSize
 import com.wordtaker.keyboard.FlorisImeService
-import com.wordtaker.keyboard.R
 import com.wordtaker.keyboard.app.FlorisPreferenceStore
 import com.wordtaker.keyboard.editorInstance
 import com.wordtaker.keyboard.glideTypingManager
@@ -132,13 +128,6 @@ import com.wordtaker.lib.snygg.ui.SnyggText
 import com.wordtaker.lib.snygg.ui.rememberSnyggThemeQuery
 import kotlin.math.abs
 import kotlin.math.sqrt
-
-// WordTaker: bottom-left collapse chevron sizing (overlay, does not affect key layout).
-// Kept small and pinned to the extreme bottom-left corner so its clickable footprint stays
-// inside the key margin/gap and never covers the tappable body of the "123" key beneath it.
-private const val WT_COLLAPSE_CHEVRON_SIZE_DP = 18
-private const val WT_COLLAPSE_CHEVRON_ICON_DP = 14
-private const val WT_COLLAPSE_CHEVRON_PADDING_DP = 0
 
 @SuppressLint("UnusedBoxWithConstraintsScope")
 @OptIn(ExperimentalComposeUiApi::class)
@@ -363,29 +352,6 @@ fun TextKeyboardLayout(
 
         popupUiController.RenderPopups()
     }
-
-        // WordTaker: WeChat/iOS-style collapse chevron at the bottom-left corner. Tapping it
-        // hides the keyboard window (same call the toolbar collapse button uses). Rendered in the
-        // OUTER Box — outside the keyboard's pointerInteropFilter — so its clickable actually
-        // receives taps, while the function-row keys keep their fixed positions/sizes.
-        if (keyboard.mode == KeyboardMode.CHARACTERS) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(WT_COLLAPSE_CHEVRON_PADDING_DP.dp)
-                    .size(WT_COLLAPSE_CHEVRON_SIZE_DP.dp)
-                    .clickable { FlorisImeService.hideUi() },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_wt_collapse),
-                    contentDescription = "收起键盘",
-                    modifier = Modifier.size(WT_COLLAPSE_CHEVRON_ICON_DP.dp),
-                    // P2-303: 深色模式下 #3C4043 在深底上几乎不可见，改为随深浅取色。
-                    tint = if (isSystemInDarkTheme()) Color(0xFFBFC3C7) else Color(0xFF3C4043),
-                )
-            }
-        }
     }
 
     LaunchedEffect(Unit) {
@@ -435,8 +401,9 @@ private fun TextKeyButton(
     desiredKey: TextKey,
     debugShowTouchBoundaries: Boolean,
 ) = with(LocalDensity.current) {
+    val keyCode = key.computedData.code
     val attributes = mapOf(
-        FlorisImeUi.Attr.Code to key.computedData.code,
+        FlorisImeUi.Attr.Code to keyCode,
         FlorisImeUi.Attr.Mode to evaluator.keyboard.mode.toString(),
         FlorisImeUi.Attr.ShiftState to evaluator.state.inputShiftState.toString(),
     )
@@ -455,6 +422,24 @@ private fun TextKeyButton(
     val size = remember(key, desiredKey) {
         key.visibleBounds.size.toDpSize()
     }
+    val languageSwitchWidthPx = if (keyCode == KeyCode.LANGUAGE_SWITCH) {
+        languageSwitchVisualWidthPx(desiredKey.touchBounds.width * 10f)
+    } else {
+        0f
+    }
+    val renderedKeySize = if (languageSwitchWidthPx > 0f) {
+        size.copy(width = languageSwitchWidthPx.toDp())
+    } else {
+        size
+    }
+    val renderedKeyOffset = if (languageSwitchWidthPx > 0f) {
+        Offset(
+            x = key.visibleBounds.center.x - languageSwitchWidthPx / 2f,
+            y = key.visibleBounds.top,
+        ).toIntOffset()
+    } else {
+        key.visibleBounds.topLeft.toIntOffset()
+    }
 
     // WordTaker (P1-2): press feedback motion. Press state applies instantly (snap), release
     // fades pressed -> normal background over 120ms. Keys WITHOUT a preview popup (space,
@@ -462,7 +447,6 @@ private fun TextKeyButton(
     // scale with a spring release. Only transform/color are animated — no relayout.
     val prefs by FlorisPreferenceStore
     val popupEnabled by prefs.keyboard.popupEnabled.collectAsState()
-    val keyCode = key.computedData.code
     val keyboardMode = evaluator.keyboard.mode
     val isNumericMode = keyboardMode == KeyboardMode.NUMERIC ||
         keyboardMode == KeyboardMode.PHONE || keyboardMode == KeyboardMode.PHONE2 ||
@@ -547,8 +531,8 @@ private fun TextKeyButton(
         attributes = attributes,
         selector = selector,
         modifier = Modifier
-            .requiredSize(size)
-            .absoluteOffset { key.visibleBounds.topLeft.toIntOffset() }
+            .requiredSize(renderedKeySize)
+            .absoluteOffset { renderedKeyOffset }
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
@@ -597,16 +581,27 @@ private fun TextKeyButton(
             // 「中」「英」对角分布同显：当前输入模式的字用正常前景色、稍大字号高亮，
             // 另一字用柔和灰、略小字号淡化，斜向错开排布 (中↖ / 英↘)，两字均完整不裁切、不换行。
             // keyStyle.fontSize() 可能为 Unspecified，需回退到具体字号，否则 *Float 得 NaN。
-            val baseSize = keyStyle.fontSize()
+            val requestedBaseSize = keyStyle.fontSize()
                 .takeOrElse { keyStyle.lineHeight() }
                 .takeOrElse { LANGUAGE_SWITCH_FALLBACK_SIZE }
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clipToBounds(),
+            ) {
+            val baseSize = languageSwitchBaseSizeSp(
+                requestedSizeSp = requestedBaseSize.value,
+                availableWidthPx = maxWidth.toPx(),
+                availableHeightPx = maxHeight.toPx(),
+                density = this@with.density,
+                fontScale = this@with.fontScale,
+            ).sp
             val activeSize = baseSize * LANGUAGE_SWITCH_ACTIVE_SCALE
             val mutedSize = baseSize * LANGUAGE_SWITCH_MUTED_SCALE
-            val diag = with(LocalDensity.current) { baseSize.toPx().toDp() * LANGUAGE_SWITCH_DIAG_FACTOR }
+            val diag = baseSize.toPx().toDp() * LANGUAGE_SWITCH_DIAG_FACTOR
             Box(
                 modifier = Modifier
-                    .wrapContentSize()
-                    .align(Alignment.Center),
+                    .fillMaxSize(),
             ) {
                 Text(
                     modifier = Modifier
@@ -618,6 +613,9 @@ private fun TextKeyButton(
                     fontStyle = keyStyle.fontStyle(),
                     fontWeight = keyStyle.fontWeight(),
                     letterSpacing = keyStyle.letterSpacing(),
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
                 )
                 Text(
                     modifier = Modifier
@@ -629,7 +627,11 @@ private fun TextKeyButton(
                     fontStyle = keyStyle.fontStyle(),
                     fontWeight = keyStyle.fontWeight(),
                     letterSpacing = keyStyle.letterSpacing(),
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
                 )
+            }
             }
         } else {
         key.label?.let { label ->
