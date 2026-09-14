@@ -101,8 +101,8 @@ object AppGraph {
     val backendClient: BackendClient by lazy {
         BackendClient(
             deviceId = DeviceIdentity.get(requireContext()),
-            tokenProvider = oidcTokenManager::accessToken,
-            tokenRefresher = oidcTokenManager::refreshAfterUnauthorized,
+            authSessionProvider = oidcTokenManager::accessSession,
+            authSessionRefresher = oidcTokenManager::refreshAfterUnauthorized,
         )
     }
 

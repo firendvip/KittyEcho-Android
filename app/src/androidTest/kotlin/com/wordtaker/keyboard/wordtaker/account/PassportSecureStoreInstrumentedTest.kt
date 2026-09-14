@@ -81,6 +81,26 @@ class PassportSecureStoreInstrumentedTest {
         assertFalse(TokenStore(context).isLoggedIn())
     }
 
+    @Test
+    fun credentialGenerationChangesOnReplacementAndClearButNotSameSessionRotation() {
+        val store = TokenStore(context)
+        val initial = store.credentialGeneration()
+        val first = OidcTokens("same-access", "family-a", 2_000L)
+
+        store.setOidc(first, null)
+        val signedIn = store.credentialGeneration()
+        assertTrue(signedIn > initial)
+
+        store.updateOidcTokens(OidcTokens("rotated-access", "family-a2", 3_000L))
+        assertEquals(signedIn, store.credentialGeneration())
+
+        store.clear()
+        val signedOut = store.credentialGeneration()
+        assertTrue(signedOut > signedIn)
+        store.setOidc(OidcTokens("same-access", "family-b", 4_000L), null)
+        assertTrue(store.credentialGeneration() > signedOut)
+    }
+
     private fun deleteKey(alias: String) {
         KeyStore.getInstance(ANDROID_KEYSTORE).apply {
             load(null)

@@ -30,6 +30,10 @@ class TokenStore(context: Context) : AuthSessionStore {
     private var cachedOidcTokens: OidcTokens? = null
     @Volatile
     private var tokenLoaded = false
+    private var generation = 0L
+
+    @Synchronized
+    override fun credentialGeneration(): Long = generation
 
     /** 仅返回 accessToken（无则 null）。 */
     fun accessToken(): String? {
@@ -70,6 +74,7 @@ class TokenStore(context: Context) : AuthSessionStore {
             cachedToken = accessToken
             cachedOidcTokens = null
             tokenLoaded = true
+            generation += 1
         }
     }
 
@@ -87,6 +92,7 @@ class TokenStore(context: Context) : AuthSessionStore {
             cachedOidcTokens = tokens
             cachedToken = null
             tokenLoaded = true
+            generation += 1
         }
     }
 
@@ -116,6 +122,7 @@ class TokenStore(context: Context) : AuthSessionStore {
             cachedOidcTokens = null
             cachedToken = null
             tokenLoaded = false
+            generation += 1
         }
     }
 
@@ -141,6 +148,7 @@ class TokenStore(context: Context) : AuthSessionStore {
             cachedToken = null
             cachedOidcTokens = null
             tokenLoaded = true
+            generation += 1
         }
     }
 

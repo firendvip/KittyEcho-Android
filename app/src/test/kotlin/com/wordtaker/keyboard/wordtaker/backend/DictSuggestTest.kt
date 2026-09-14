@@ -24,7 +24,7 @@ class DictSuggestTest : FunSpec({
 
     fun client(): BackendClient = BackendClient(
         deviceId = DICT_DEVICE_ID,
-        tokenProvider = { token },
+        authSessionProvider = { AuthRequestSession(0L, token) },
         baseUrl = server.url("/aiapi").toString(),
     )
 

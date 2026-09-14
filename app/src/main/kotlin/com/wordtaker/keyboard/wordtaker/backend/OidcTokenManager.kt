@@ -13,52 +13,81 @@ class OidcTokenManager(
     }
 
     @Synchronized
-    fun accessToken(): String? {
-        if (!passportEnabled) return legacyTokenProvider()
-        val tokens = store.oidcTokens() ?: return legacyTokenProvider()
+    fun accessSession(): AuthRequestSession {
+        val current = currentSession()
+        if (!passportEnabled) return current.request
+        val tokens = current.tokens ?: return current.request
         if (tokens.expiresAtEpochSeconds > nowEpochSeconds() + REFRESH_SKEW_SECONDS) {
-            return tokens.accessToken
+            return current.request
         }
-        return refresh(tokens, allowStillValidFallback = true)
+        return refresh(current, allowStillValidFallback = true)
     }
 
     @Synchronized
-    fun refreshAfterUnauthorized(failedToken: String?): String? {
+    fun refreshAfterUnauthorized(failedSession: AuthRequestSession): AuthRequestSession? {
         if (!passportEnabled) return null
-        val tokens = store.oidcTokens() ?: return null
-        if (failedToken != null && tokens.accessToken != failedToken) return tokens.accessToken
-        return refresh(tokens, allowStillValidFallback = false)
+        val current = currentSession()
+        if (current.request.generation != failedSession.generation) throw sessionChanged()
+        val tokens = current.tokens ?: return null
+        if (failedSession.accessToken != null && tokens.accessToken != failedSession.accessToken) {
+            return current.request
+        }
+        return refresh(current, allowStillValidFallback = false)
     }
 
-    private fun refresh(tokens: OidcTokens, allowStillValidFallback: Boolean): String? {
+    private fun refresh(session: ManagedSession, allowStillValidFallback: Boolean): AuthRequestSession {
+        val tokens = requireNotNull(session.tokens)
         val refreshToken = tokens.refreshToken
         if (refreshToken == null) {
             if (allowStillValidFallback && tokens.expiresAtEpochSeconds > nowEpochSeconds()) {
-                return tokens.accessToken
+                return session.request
             }
-            store.clear()
+            synchronized(store) {
+                ensureCurrent(session)
+                store.clear()
+            }
             throw expiredSession()
         }
         return try {
             val refreshed = tokenApi.refresh(refreshToken)
             synchronized(store) {
-                val current = store.oidcTokens()
-                if (current != tokens) return current?.accessToken
+                ensureCurrent(session)
                 store.updateOidcTokens(refreshed)
-                refreshed.accessToken
+                AuthRequestSession(session.request.generation, refreshed.accessToken)
             }
         } catch (error: BackendException) {
+            if (error.code == BackendException.CODE_AUTH_SESSION_CHANGED) throw error
             synchronized(store) {
-                val current = store.oidcTokens()
-                if (current != tokens) return current?.accessToken
+                ensureCurrent(session)
                 if (error.isAuthExpired) store.clear()
             }
             if (!error.isAuthExpired && allowStillValidFallback && tokens.expiresAtEpochSeconds > nowEpochSeconds()) {
-                return tokens.accessToken
+                return session.request
             }
             throw error
         }
     }
+
+    private fun currentSession(): ManagedSession = synchronized(store) {
+        val generation = store.credentialGeneration()
+        val tokens = if (passportEnabled) store.oidcTokens() else null
+        val accessToken = tokens?.accessToken ?: legacyTokenProvider()
+        ManagedSession(AuthRequestSession(generation, accessToken), tokens)
+    }
+
+    private fun ensureCurrent(expected: ManagedSession) {
+        val current = currentSession()
+        if (current.request.generation != expected.request.generation || current.tokens != expected.tokens) {
+            throw sessionChanged()
+        }
+    }
+
+    private fun sessionChanged() = BackendException(
+        BackendException.Kind.HTTP,
+        "Authentication session changed",
+        code = BackendException.CODE_AUTH_SESSION_CHANGED,
+        status = 409,
+    )
 
     private fun expiredSession() = BackendException(
         BackendException.Kind.HTTP,
@@ -70,4 +99,9 @@ class OidcTokenManager(
     private companion object {
         const val REFRESH_SKEW_SECONDS = 60L
     }
+
+    private data class ManagedSession(
+        val request: AuthRequestSession,
+        val tokens: OidcTokens?,
+    )
 }

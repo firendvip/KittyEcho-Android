@@ -20,8 +20,8 @@ import java.util.concurrent.TimeUnit
  */
 class BackendClient(
     private val deviceId: String,
-    private val tokenProvider: () -> String?,
-    private val tokenRefresher: ((failedToken: String) -> String?)? = null,
+    private val authSessionProvider: () -> AuthRequestSession,
+    private val authSessionRefresher: ((failedSession: AuthRequestSession) -> AuthRequestSession?)? = null,
     baseUrl: String = BackendConfig.BASE_URL + BackendConfig.API_PREFIX,
     client: OkHttpClient? = null,
 ) : AccountApi {
@@ -245,14 +245,14 @@ class BackendClient(
         timeoutMs: Long = BackendConfig.REQUEST_TIMEOUT_MS,
     ): JSONObject? {
         val bodyText = (body ?: JSONObject()).toString()
-        var token = tokenProvider()?.takeIf(String::isNotBlank)
+        var authSession = authSessionProvider().withUsableToken()
         repeat(MAX_AUTH_ATTEMPTS) { attempt ->
             val builder = Request.Builder()
                 .url(baseUrl + pathname)
                 .addHeader("Content-Type", "application/json")
                 .addHeader("x-device-id", deviceId)
                 .addHeader("x-platform", BackendConfig.PLATFORM)
-            token?.let { builder.addHeader("Authorization", "Bearer $it") }
+            authSession.accessToken?.let { builder.addHeader("Authorization", "Bearer $it") }
             val request = when (method) {
                 "GET" -> builder.get()
                 else -> builder.method(method, bodyText.toRequestBody(JSON))
@@ -274,10 +274,18 @@ class BackendClient(
             response.use { res ->
                 val text = runCatching { res.body?.string() }.getOrNull().orEmpty()
                 val json = runCatching { if (text.isNotBlank()) JSONObject(text) else null }.getOrNull()
-                if (res.code == 401 && attempt == 0 && token != null && tokenRefresher != null) {
-                    val refreshed = tokenRefresher.invoke(token!!)?.takeIf(String::isNotBlank)
-                    if (refreshed != null && refreshed != token) {
-                        token = refreshed
+                if (
+                    res.code == 401 &&
+                    attempt == 0 &&
+                    authSession.accessToken != null &&
+                    authSessionRefresher != null
+                ) {
+                    val refreshed = authSessionRefresher.invoke(authSession)?.withUsableToken()
+                    if (refreshed != null && refreshed.generation != authSession.generation) {
+                        throw sessionChanged()
+                    }
+                    if (refreshed?.accessToken != null && refreshed.accessToken != authSession.accessToken) {
+                        authSession = refreshed
                         return@repeat
                     }
                 }
@@ -298,6 +306,16 @@ class BackendClient(
     }
 
     private fun JSONObject?.dataObject(): JSONObject = this?.optJSONObject("data") ?: JSONObject()
+
+    private fun AuthRequestSession.withUsableToken(): AuthRequestSession =
+        copy(accessToken = accessToken?.takeIf(String::isNotBlank))
+
+    private fun sessionChanged() = BackendException(
+        BackendException.Kind.HTTP,
+        "Authentication session changed",
+        code = BackendException.CODE_AUTH_SESSION_CHANGED,
+        status = 409,
+    )
 
     private companion object {
         const val CONNECT_TIMEOUT_SECONDS = 10L

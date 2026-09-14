@@ -437,7 +437,9 @@ private class FakeAuthSessionStore(
     var token: String? = null,
     private var storedAccount: AccountInfo? = null,
 ) : AuthSessionStore {
+    private var generation = 0L
     var oidcSession: OidcTokens? = null
+    override fun credentialGeneration(): Long = generation
     override fun isLoggedIn(): Boolean = !token.isNullOrBlank()
 
     override fun account(): AccountInfo? = storedAccount
@@ -446,12 +448,14 @@ private class FakeAuthSessionStore(
         token = accessToken
         oidcSession = null
         storedAccount = account
+        generation += 1
     }
 
     override fun setOidc(tokens: OidcTokens, account: AccountInfo?) {
         token = tokens.accessToken
         oidcSession = tokens
         storedAccount = account
+        generation += 1
     }
 
     override fun oidcTokens(): OidcTokens? = oidcSession
@@ -466,6 +470,7 @@ private class FakeAuthSessionStore(
             token = null
             oidcSession = null
             storedAccount = null
+            generation += 1
         }
     }
 
@@ -477,6 +482,7 @@ private class FakeAuthSessionStore(
         token = null
         oidcSession = null
         storedAccount = null
+        generation += 1
     }
 }
 
@@ -488,6 +494,10 @@ private class BlockingProfileUpdateStore(
     private var token: String? = null
     @Volatile
     private var storedAccount: AccountInfo? = null
+    @Volatile
+    private var generation = 0L
+
+    override fun credentialGeneration(): Long = generation
 
     override fun isLoggedIn(): Boolean = !token.isNullOrBlank()
 
@@ -496,6 +506,7 @@ private class BlockingProfileUpdateStore(
     override fun set(accessToken: String, account: AccountInfo?) {
         token = accessToken
         storedAccount = account
+        generation += 1
     }
 
     override fun updateAccount(account: AccountInfo?) {
@@ -507,6 +518,7 @@ private class BlockingProfileUpdateStore(
     override fun clear() {
         token = null
         storedAccount = null
+        generation += 1
     }
 
     override fun clearOidc() = Unit

@@ -32,6 +32,12 @@ interface AccountApi {
 
 /** Minimal credential/profile persistence boundary used by [AccountRepository]. */
 interface AuthSessionStore {
+    /**
+     * Monotonic process-local identity for the credential set. Replacement and clear increment it;
+     * an access/refresh rotation inside the same login family preserves it.
+     */
+    fun credentialGeneration(): Long
+
     fun isLoggedIn(): Boolean
 
     fun account(): AccountInfo?

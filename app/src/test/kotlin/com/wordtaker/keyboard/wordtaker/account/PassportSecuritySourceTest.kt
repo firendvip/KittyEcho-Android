@@ -53,8 +53,8 @@ class PassportSecuritySourceTest : FunSpec({
             "app/src/main/kotlin/com/wordtaker/keyboard/wordtaker/backend/BackendClient.kt",
         ).readText()
 
-        graph.contains("tokenProvider = oidcTokenManager::accessToken") shouldBe true
-        graph.contains("tokenRefresher = oidcTokenManager::refreshAfterUnauthorized") shouldBe true
+        graph.contains("authSessionProvider = oidcTokenManager::accessSession") shouldBe true
+        graph.contains("authSessionRefresher = oidcTokenManager::refreshAfterUnauthorized") shouldBe true
         backend.contains("MAX_AUTH_ATTEMPTS = 2") shouldBe true
     }
 })

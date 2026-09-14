@@ -2,6 +2,7 @@ package com.wordtaker.keyboard.wordtaker.polish
 
 import com.wordtaker.keyboard.wordtaker.backend.BackendException
 import com.wordtaker.keyboard.wordtaker.backend.BackendClient
+import com.wordtaker.keyboard.wordtaker.backend.AuthRequestSession
 import com.wordtaker.keyboard.wordtaker.backend.PolishOutcome
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
@@ -163,7 +164,7 @@ class RealPolisherTest : FunSpec({
             )
             val backend = BackendClient(
                 deviceId = "0123456789abcdef0123456789abcdef",
-                tokenProvider = { null },
+                authSessionProvider = { AuthRequestSession(0L, null) },
                 baseUrl = server.url("/aiapi").toString(),
             )
             val diagnostics = TestDiagnostics()

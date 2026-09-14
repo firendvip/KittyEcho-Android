@@ -38,8 +38,15 @@ class BackendException(
         const val CODE_INSUFFICIENT_QUOTA = "INSUFFICIENT_QUOTA"
         const val CODE_DAILY_CAP_EXCEEDED = "DAILY_CAP_EXCEEDED"
         const val CODE_NOT_LOGGED_IN = "NOT_LOGGED_IN"
+        const val CODE_AUTH_SESSION_CHANGED = "AUTH_SESSION_CHANGED"
     }
 }
+
+/** Binds one backend operation to the credential identity it started with. */
+data class AuthRequestSession(
+    val generation: Long,
+    val accessToken: String?,
+)
 
 /** POST /polish 成功结果。 */
 data class PolishOutcome(

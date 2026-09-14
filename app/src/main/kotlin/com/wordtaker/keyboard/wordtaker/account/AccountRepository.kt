@@ -21,7 +21,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.util.concurrent.atomic.AtomicLong
 
 /** Authentication and profile hydration are explicit and independently observable. */
 sealed interface AccountProfileState {
@@ -61,7 +60,7 @@ class AccountRepository(
 ) {
 
     private val sessionLock = Any()
-    private val sessionGeneration = AtomicLong(0)
+    private var sessionGeneration = 0L
     private val initiallyLoggedIn = tokenStore.isLoggedIn()
     private val initialAccount = tokenStore.account().takeIf { initiallyLoggedIn }
     private val _state = MutableStateFlow(
@@ -142,10 +141,14 @@ class AccountRepository(
             persist = { result -> tokenStore.setOidc(tokens, result.account) },
         )
 
-    internal fun authenticationGeneration(): Long = sessionGeneration.get()
+    internal fun authenticationGeneration(): Long = synchronized(sessionLock) {
+        sessionGeneration
+    }
 
     internal fun invalidatePendingAuthentication() {
-        sessionGeneration.incrementAndGet()
+        synchronized(sessionLock) {
+            sessionGeneration += 1
+        }
     }
 
     /** 登录态内刷新账号摘要；失败进入可理解、可重试的资料不可用状态。 */
@@ -158,7 +161,7 @@ class AccountRepository(
                 _state.update { current ->
                     if (current.loggedIn) current.copy(profile = AccountProfileState.Loading) else current
                 }
-                sessionGeneration.get()
+                sessionGeneration
             }
         }
         if (expectedGeneration == null) {
@@ -199,14 +202,14 @@ class AccountRepository(
     }
 
     private fun invalidateAuthenticationLocked() {
-        sessionGeneration.incrementAndGet()
+        sessionGeneration += 1
         tokenStore.clear()
         _state.value = AccountState()
     }
 
     /** Login success always hydrates /auth/me here, never from a page-mount side effect. */
     private suspend fun login(
-        expectedGeneration: Long = sessionGeneration.get(),
+        expectedGeneration: Long = authenticationGeneration(),
         persist: (LoginResult) -> Unit = { result -> tokenStore.set(result.accessToken, result.account) },
         block: () -> LoginResult,
     ): AccountResult<Unit> =
@@ -233,9 +236,10 @@ class AccountRepository(
         persist: (LoginResult) -> Unit,
     ): Long? =
         synchronized(sessionLock) {
-            if (sessionGeneration.get() != expectedGeneration) return@synchronized null
+            if (sessionGeneration != expectedGeneration) return@synchronized null
             persist(result)
-            val generation = sessionGeneration.incrementAndGet()
+            sessionGeneration += 1
+            val generation = sessionGeneration
             _state.update { current ->
                 current.copy(profile = AccountProfileState.Loading)
             }
@@ -291,14 +295,14 @@ class AccountRepository(
 
     private fun invalidateAuthenticationIfCurrent(expectedGeneration: Long) {
         synchronized(sessionLock) {
-            if (sessionGeneration.get() == expectedGeneration) {
+            if (sessionGeneration == expectedGeneration) {
                 invalidateAuthenticationLocked()
             }
         }
     }
 
     private fun isCurrentSessionLocked(expectedGeneration: Long): Boolean =
-        sessionGeneration.get() == expectedGeneration && tokenStore.isLoggedIn()
+        sessionGeneration == expectedGeneration && tokenStore.isLoggedIn()
 
     private fun JSONObject.requiredAccount(): AccountInfo {
         val accountJson = optJSONObject("account") ?: throw InvalidProfileException()
@@ -309,7 +313,7 @@ class AccountRepository(
     /** IO 包裹 + 错误分类：BackendException → 用户可读 Err；401 顺手清登录态。 */
     private suspend fun <T> call(block: suspend () -> T): AccountResult<T> =
         withContext(ioDispatcher) {
-            val requestGeneration = sessionGeneration.get()
+            val requestGeneration = authenticationGeneration()
             try {
                 AccountResult.Ok(block())
             } catch (e: BackendException) {

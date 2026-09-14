@@ -224,6 +224,19 @@ class PassportLoginControllerTest : FunSpec({
         }
     }
 
+    test("begin and cancel cannot return inside callback check-before-set or allow later writes") {
+        assertInvalidationWaitsForCallbackPersist(
+            invalidate = PassportLoginController::cancel,
+            expectedStatus = PassportLoginStatus.Idle,
+            expectPending = false,
+        )
+        assertInvalidationWaitsForCallbackPersist(
+            invalidate = { it.begin() },
+            expectedStatus = PassportLoginStatus.AwaitingBrowser,
+            expectPending = true,
+        )
+    }
+
     test("a valid callback exchanges PKCE code, stores rotating tokens and hydrates profile") {
         runTest {
             val fixture = fixture(dispatcher = StandardTestDispatcher(testScheduler))
@@ -310,6 +323,59 @@ private data class ControllerFixture(
     val api: ControllerAccountApi,
 )
 
+private fun assertInvalidationWaitsForCallbackPersist(
+    invalidate: (PassportLoginController) -> Unit,
+    expectedStatus: PassportLoginStatus,
+    expectPending: Boolean,
+) {
+    val pending = ControllerPendingStore()
+    var generated = 0
+    val flow = PassportOidcFlow(
+        PassportOidcConfig(true, "https://auth.yaa3.com", "kittyecho-android", "kittyecho://auth"),
+        pending,
+        randomBytes = { size -> ByteArray(size) { (generated++ and 0xff).toByte() } },
+        nowMillis = { 1_000L },
+    )
+    val setEntered = CountDownLatch(1)
+    val allowSet = CountDownLatch(1)
+    val store = BlockingControllerAuthStore(setEntered, allowSet)
+    val repository = AccountRepository(ControllerAccountApi(), store, ioDispatcher = Dispatchers.IO)
+    val controller = PassportLoginController(flow, ControllerTokenApi(), repository, Dispatchers.IO)
+    controller.begin()
+    val state = pending.value!!.state
+    val executor = Executors.newFixedThreadPool(2)
+
+    try {
+        val callback = executor.submit<AccountResult<Unit>> {
+            runBlocking {
+                controller.handleCallback(
+                    "kittyecho://auth?code=authorization-code-123456&state=$state",
+                )
+            }
+        }
+        setEntered.await(5, TimeUnit.SECONDS) shouldBe true
+
+        val invalidationReturned = CountDownLatch(1)
+        val invalidation = executor.submit {
+            invalidate(controller)
+            invalidationReturned.countDown()
+        }
+        invalidationReturned.await(200, TimeUnit.MILLISECONDS) shouldBe false
+
+        allowSet.countDown()
+        invalidation.get(5, TimeUnit.SECONDS)
+        val writesWhenInvalidationReturned = store.persistentWrites
+        callback.get(5, TimeUnit.SECONDS)
+
+        store.persistentWrites shouldBe writesWhenInvalidationReturned
+        controller.status.value shouldBe expectedStatus
+        (pending.value != null) shouldBe expectPending
+    } finally {
+        allowSet.countDown()
+        executor.shutdownNow()
+    }
+}
+
 private fun fixture(
     pending: ControllerPendingStore = ControllerPendingStore(),
     dispatcher: kotlinx.coroutines.CoroutineDispatcher = StandardTestDispatcher(),
@@ -390,12 +456,15 @@ private class BlockingControllerTokenApi : PassportOidcTokenApi {
 private class ControllerAuthStore : AuthSessionStore {
     @Volatile var oidc: OidcTokens? = null
     @Volatile private var profile: AccountInfo? = null
+    @Volatile private var generation = 0L
+    override fun credentialGeneration(): Long = generation
     override fun isLoggedIn(): Boolean = oidc != null
     override fun account(): AccountInfo? = profile
     override fun set(accessToken: String, account: AccountInfo?) = Unit
     override fun setOidc(tokens: OidcTokens, account: AccountInfo?) {
         oidc = tokens
         profile = account
+        generation += 1
     }
     override fun oidcTokens(): OidcTokens? = oidc
     override fun updateOidcTokens(tokens: OidcTokens) {
@@ -404,6 +473,7 @@ private class ControllerAuthStore : AuthSessionStore {
     override fun clearOidc() {
         oidc = null
         profile = null
+        generation += 1
     }
     override fun updateAccount(account: AccountInfo?) {
         profile = account
@@ -411,6 +481,49 @@ private class ControllerAuthStore : AuthSessionStore {
     override fun clear() {
         oidc = null
         profile = null
+        generation += 1
+    }
+}
+
+private class BlockingControllerAuthStore(
+    private val setEntered: CountDownLatch,
+    private val allowSet: CountDownLatch,
+) : AuthSessionStore {
+    @Volatile private var oidc: OidcTokens? = null
+    @Volatile private var profile: AccountInfo? = null
+    @Volatile var persistentWrites: Int = 0
+        private set
+    @Volatile private var generation = 0L
+
+    override fun credentialGeneration(): Long = generation
+    override fun isLoggedIn(): Boolean = oidc != null
+    override fun account(): AccountInfo? = profile
+    override fun set(accessToken: String, account: AccountInfo?) = Unit
+    override fun setOidc(tokens: OidcTokens, account: AccountInfo?) {
+        setEntered.countDown()
+        check(allowSet.await(5, TimeUnit.SECONDS))
+        oidc = tokens
+        profile = account
+        persistentWrites += 1
+        generation += 1
+    }
+    override fun oidcTokens(): OidcTokens? = oidc
+    override fun updateOidcTokens(tokens: OidcTokens) {
+        oidc = tokens
+    }
+    override fun clearOidc() {
+        oidc = null
+        profile = null
+        generation += 1
+    }
+    override fun updateAccount(account: AccountInfo?) {
+        profile = account
+        persistentWrites += 1
+    }
+    override fun clear() {
+        oidc = null
+        profile = null
+        generation += 1
     }
 }
 

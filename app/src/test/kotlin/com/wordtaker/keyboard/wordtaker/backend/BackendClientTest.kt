@@ -19,7 +19,7 @@ class BackendClientTest : FunSpec({
 
     fun client(): BackendClient = BackendClient(
         deviceId = DEVICE_ID,
-        tokenProvider = { token },
+        authSessionProvider = { AuthRequestSession(0L, token) },
         baseUrl = server.url("/aiapi").toString(),
     )
 
@@ -114,10 +114,10 @@ class BackendClientTest : FunSpec({
         var failedToken: String? = null
         val refreshingClient = BackendClient(
             deviceId = DEVICE_ID,
-            tokenProvider = { token },
-            tokenRefresher = {
-                failedToken = it
-                "rotated-access"
+            authSessionProvider = { AuthRequestSession(7L, token) },
+            authSessionRefresher = {
+                failedToken = it.accessToken
+                AuthRequestSession(it.generation, "rotated-access")
             },
             baseUrl = server.url("/aiapi").toString(),
         )
@@ -133,10 +133,10 @@ class BackendClientTest : FunSpec({
         var refreshCalls = 0
         val anonymous = BackendClient(
             deviceId = DEVICE_ID,
-            tokenProvider = { null },
-            tokenRefresher = {
+            authSessionProvider = { AuthRequestSession(0L, null) },
+            authSessionRefresher = {
                 refreshCalls += 1
-                "unexpected"
+                AuthRequestSession(it.generation, "unexpected")
             },
             baseUrl = server.url("/aiapi").toString(),
         )
@@ -147,16 +147,116 @@ class BackendClientTest : FunSpec({
         server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
         val unchanged = BackendClient(
             deviceId = DEVICE_ID,
-            tokenProvider = { "same-token" },
-            tokenRefresher = {
+            authSessionProvider = { AuthRequestSession(0L, "same-token") },
+            authSessionRefresher = {
                 refreshCalls += 1
-                "same-token"
+                AuthRequestSession(it.generation, "same-token")
             },
             baseUrl = server.url("/aiapi").toString(),
         )
         shouldThrow<BackendException> { unchanged.getQuota() }
         refreshCalls shouldBe 1
         server.requestCount shouldBe 2
+    }
+
+    test("a credential generation change never replays the original request with another account") {
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+        val client = BackendClient(
+            deviceId = DEVICE_ID,
+            authSessionProvider = { AuthRequestSession(10L, "account-a-token") },
+            authSessionRefresher = { AuthRequestSession(11L, "account-b-token") },
+            baseUrl = server.url("/aiapi").toString(),
+        )
+
+        val error = shouldThrow<BackendException> { client.polish("A 的原始文本", "normal") }
+
+        error.code shouldBe BackendException.CODE_AUTH_SESSION_CHANGED
+        error.isAuthExpired shouldBe false
+        server.requestCount shouldBe 1
+        server.takeRequest().getHeader("Authorization") shouldBe "Bearer account-a-token"
+    }
+
+    test("ABA token equality still aborts when the credential generation changed") {
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+        val client = BackendClient(
+            deviceId = DEVICE_ID,
+            authSessionProvider = { AuthRequestSession(21L, "same-token") },
+            authSessionRefresher = { AuthRequestSession(23L, "same-token") },
+            baseUrl = server.url("/aiapi").toString(),
+        )
+
+        shouldThrow<BackendException> { client.getQuota() }.code shouldBe
+            BackendException.CODE_AUTH_SESSION_CHANGED
+        server.requestCount shouldBe 1
+    }
+
+    test("a second 401 stops after the one allowed same-session refresh retry") {
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+        var refreshCalls = 0
+        val client = BackendClient(
+            deviceId = DEVICE_ID,
+            authSessionProvider = { AuthRequestSession(31L, "expired-access") },
+            authSessionRefresher = {
+                refreshCalls += 1
+                AuthRequestSession(it.generation, "rotated-access")
+            },
+            baseUrl = server.url("/aiapi").toString(),
+        )
+
+        shouldThrow<BackendException> { client.getQuota() }.status shouldBe 401
+        refreshCalls shouldBe 1
+        server.requestCount shouldBe 2
+    }
+
+    test("missing null and blank refresh results never replay an authenticated 401") {
+        val clients = listOf(
+            BackendClient(
+                deviceId = DEVICE_ID,
+                authSessionProvider = { AuthRequestSession(1L, "access") },
+                baseUrl = server.url("/aiapi").toString(),
+            ),
+            BackendClient(
+                deviceId = DEVICE_ID,
+                authSessionProvider = { AuthRequestSession(2L, "access") },
+                authSessionRefresher = { null },
+                baseUrl = server.url("/aiapi").toString(),
+            ),
+            BackendClient(
+                deviceId = DEVICE_ID,
+                authSessionProvider = { AuthRequestSession(3L, "access") },
+                authSessionRefresher = { AuthRequestSession(it.generation, " ") },
+                baseUrl = server.url("/aiapi").toString(),
+            ),
+        )
+
+        clients.forEachIndexed { index, candidate ->
+            server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+            shouldThrow<BackendException> { candidate.getQuota() }.status shouldBe 401
+            server.requestCount shouldBe index + 1
+        }
+    }
+
+    test("HTTP error parsing accepts alternate code and safely defaults empty bodies and messages") {
+        server.enqueue(
+            MockResponse().setResponseCode(403).setBody("""{"error":"ALT_DENIED","message":""}"""),
+        )
+        val alternate = shouldThrow<BackendException> { client().getQuota() }
+        alternate.code shouldBe "ALT_DENIED"
+        alternate.status shouldBe 403
+
+        server.enqueue(MockResponse().setResponseCode(418))
+        val empty = shouldThrow<BackendException> { client().getQuota() }
+        empty.code shouldBe null
+        empty.status shouldBe 418
+    }
+
+    test("a successful empty response is accepted") {
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        client().authEmailSend("cat@example.com")
+
+        server.requestCount shouldBe 1
     }
 
     test("network failure maps to NETWORK kind") {
