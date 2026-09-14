@@ -33,13 +33,23 @@ class TokenStore(context: Context) : AuthSessionStore {
 
     /** 仅返回 accessToken（无则 null）。 */
     fun accessToken(): String? {
-        if (tokenLoaded) return cachedOidcTokens?.accessToken ?: cachedToken
+        loadTokensIfNeeded()
+        return cachedOidcTokens?.accessToken ?: cachedToken
+    }
+
+    /** Returns only a pre-Passport business token and never exposes OIDC credentials. */
+    fun legacyAccessToken(): String? {
+        loadTokensIfNeeded()
+        return cachedToken
+    }
+
+    private fun loadTokensIfNeeded() {
+        if (tokenLoaded) return
         synchronized(this) {
-            if (tokenLoaded) return cachedOidcTokens?.accessToken ?: cachedToken
+            if (tokenLoaded) return
             cachedOidcTokens = readOidcTokens()
             cachedToken = if (cachedOidcTokens == null) readToken() else null
             tokenLoaded = true
-            return cachedOidcTokens?.accessToken ?: cachedToken
         }
     }
 
@@ -94,6 +104,18 @@ class TokenStore(context: Context) : AuthSessionStore {
             cachedOidcTokens = tokens
             cachedToken = null
             tokenLoaded = true
+        }
+    }
+
+    override fun clearOidc() {
+        synchronized(this) {
+            prefs.edit()
+                .remove(KEY_OIDC_SESSION_ENC)
+                .remove(KEY_ACCOUNT)
+                .apply()
+            cachedOidcTokens = null
+            cachedToken = null
+            tokenLoaded = false
         }
     }
 

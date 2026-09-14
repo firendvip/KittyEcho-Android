@@ -3,8 +3,33 @@ package com.wordtaker.keyboard.wordtaker.backend
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class OidcTokenManagerTest : FunSpec({
+
+    test("disabled Passport clears persisted OIDC credentials without reading or refreshing them") {
+        val store = MemoryAuthStore(OidcTokens("session-a", "family-a", 900L))
+        val api = FakeOidcTokenApi()
+        var legacyReads = 0
+        val manager = OidcTokenManager(
+            store = store,
+            legacyTokenProvider = {
+                legacyReads += 1
+                "legacy-session"
+            },
+            tokenApi = api,
+            nowEpochSeconds = { 1_000L },
+            passportEnabled = false,
+        )
+
+        store.tokens shouldBe null
+        manager.accessToken() shouldBe "legacy-session"
+        manager.refreshAfterUnauthorized("session-a") shouldBe null
+        api.refreshCalls shouldBe emptyList()
+        legacyReads shouldBe 1
+    }
 
     test("legacy sessions and healthy OIDC access tokens do not call refresh") {
         val api = FakeOidcTokenApi()
@@ -79,6 +104,86 @@ class OidcTokenManagerTest : FunSpec({
         }.isAuthExpired shouldBe true
         noRefreshStore.cleared shouldBe true
     }
+
+    test("a near-expiry token without a refresh family remains usable until actual expiry") {
+        val store = MemoryAuthStore(OidcTokens("session-a", null, 1_050L))
+        val manager = OidcTokenManager(store, { null }, FakeOidcTokenApi()) { 1_000L }
+
+        manager.accessToken() shouldBe "session-a"
+        store.cleared shouldBe false
+    }
+
+    test("a null failed token forces refresh while signed-out refresh remains a no-op") {
+        val signedOut = OidcTokenManager(MemoryAuthStore(), { null }, FakeOidcTokenApi()) { 1_000L }
+        signedOut.refreshAfterUnauthorized(null) shouldBe null
+
+        val store = MemoryAuthStore(OidcTokens("session-a", "family-a", 2_000L))
+        val api = FakeOidcTokenApi().apply {
+            next = OidcTokens("session-b", "family-b", 3_000L)
+        }
+        val manager = OidcTokenManager(store, { null }, api) { 1_000L }
+
+        manager.refreshAfterUnauthorized(null) shouldBe "session-b"
+        api.refreshCalls shouldBe listOf("family-a")
+    }
+
+    test("forced refresh never falls back to the failed access token on a temporary error") {
+        val failure = BackendException(BackendException.Kind.NETWORK, "transport detail")
+        val store = MemoryAuthStore(OidcTokens("session-a", "family-a", 2_000L))
+        val api = FakeOidcTokenApi().apply { this.failure = failure }
+        val manager = OidcTokenManager(store, { null }, api) { 1_000L }
+
+        shouldThrow<BackendException> {
+            manager.refreshAfterUnauthorized("session-a")
+        }.kind shouldBe BackendException.Kind.NETWORK
+        store.tokens shouldBe OidcTokens("session-a", "family-a", 2_000L)
+        store.cleared shouldBe false
+    }
+
+    test("a refresh finishing after explicit logout never restores the cleared session") {
+        val original = OidcTokens("session-a", "family-a", 1_050L)
+        val store = MemoryAuthStore(original)
+        val api = BlockingOidcTokenApi(OidcTokens("session-a2", "family-a2", 2_000L))
+        val manager = OidcTokenManager(store, { null }, api) { 1_000L }
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            val result = executor.submit<String?> { manager.accessToken() }
+            api.refreshEntered.await(5, TimeUnit.SECONDS) shouldBe true
+
+            store.clear()
+            api.allowRefreshToFinish.countDown()
+
+            result.get(5, TimeUnit.SECONDS) shouldBe null
+            store.tokens shouldBe null
+        } finally {
+            api.allowRefreshToFinish.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    test("a refresh finishing after an account switch never overwrites the new account") {
+        val original = OidcTokens("session-a", "family-a", 1_050L)
+        val switched = OidcTokens("session-b", "family-b", 2_500L)
+        val store = MemoryAuthStore(original)
+        val api = BlockingOidcTokenApi(OidcTokens("session-a2", "family-a2", 2_000L))
+        val manager = OidcTokenManager(store, { null }, api) { 1_000L }
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            val result = executor.submit<String?> { manager.accessToken() }
+            api.refreshEntered.await(5, TimeUnit.SECONDS) shouldBe true
+
+            store.updateOidcTokens(switched)
+            api.allowRefreshToFinish.countDown()
+
+            result.get(5, TimeUnit.SECONDS) shouldBe switched.accessToken
+            store.tokens shouldBe switched
+        } finally {
+            api.allowRefreshToFinish.countDown()
+            executor.shutdownNow()
+        }
+    }
 })
 
 private class FakeOidcTokenApi : PassportOidcTokenApi {
@@ -93,10 +198,29 @@ private class FakeOidcTokenApi : PassportOidcTokenApi {
         failure?.let { throw it }
         return next
     }
+
+    override fun revoke(refreshToken: String) = Unit
+}
+
+private class BlockingOidcTokenApi(
+    private val next: OidcTokens,
+) : PassportOidcTokenApi {
+    val refreshEntered = CountDownLatch(1)
+    val allowRefreshToFinish = CountDownLatch(1)
+
+    override fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens = next
+
+    override fun refresh(refreshToken: String): OidcTokens {
+        refreshEntered.countDown()
+        check(allowRefreshToFinish.await(5, TimeUnit.SECONDS))
+        return next
+    }
+
+    override fun revoke(refreshToken: String) = Unit
 }
 
 private class MemoryAuthStore(
-    var tokens: OidcTokens? = null,
+    @Volatile var tokens: OidcTokens? = null,
 ) : AuthSessionStore {
     var accountInfo: AccountInfo? = null
     var cleared = false
@@ -114,5 +238,9 @@ private class MemoryAuthStore(
     override fun oidcTokens(): OidcTokens? = tokens
     override fun updateOidcTokens(tokens: OidcTokens) {
         this.tokens = tokens
+    }
+    override fun clearOidc() {
+        tokens = null
+        cleared = true
     }
 }

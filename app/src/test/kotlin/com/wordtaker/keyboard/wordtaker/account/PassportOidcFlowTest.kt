@@ -36,6 +36,21 @@ class PassportOidcFlowTest : FunSpec({
         store.pending shouldBe null
     }
 
+    test("default-off startup deletes persisted pending authorization instead of recovering it") {
+        val store = MemoryPendingStore().apply {
+            pending = PendingPassportAuthorization(
+                state = "s".repeat(24),
+                nonce = "n".repeat(24),
+                codeVerifier = "v".repeat(43),
+                createdAtMillis = 1_000_000L,
+            )
+        }
+        val passport = flow(store = store, enabled = false)
+
+        passport.hasRecoverableLogin shouldBe false
+        store.pending shouldBe null
+    }
+
     test("default entropy and clock produce a valid recoverable request") {
         val store = MemoryPendingStore()
         val passport = PassportOidcFlow(
@@ -111,6 +126,11 @@ class PassportOidcFlowTest : FunSpec({
             "kittyecho://auth?code=one-code-value-1234&code=two-code-value-1234&state=%STATE%",
             "kittyecho://auth?code=authorization-code-123456&state=%STATE%&state=%STATE%",
             "kittyecho://auth?state=%STATE%",
+            "kittyecho://auth?code=authorization-code-123456",
+            "kittyecho://auth?code=authorization-code-123456&error=server_error&state=%STATE%",
+            "kittyecho://auth?code=authorization-code-123456&state",
+            "kittyecho://auth?=value&code=authorization-code-123456&state=%STATE%",
+            "kittyecho://auth?",
             "kittyecho://auth?code=short&state=%STATE%",
             "kittyecho://auth?code=${"a".repeat(4096)}&state=%STATE%",
         )
@@ -182,6 +202,73 @@ class PassportOidcFlowTest : FunSpec({
         passport.hasRecoverableLogin shouldBe false
     }
 
+    test("pending state accepts exact lifetime boundaries and rejects future timestamps") {
+        var now = 1_000_000L
+        val store = MemoryPendingStore()
+        val passport = flow(store = store, nowMillis = { now })
+
+        startState(passport)
+        now += PassportOidcFlow.PENDING_TTL_MS
+        passport.hasRecoverableLogin shouldBe true
+
+        store.pending = PendingPassportAuthorization(
+            state = "s".repeat(24),
+            nonce = "n".repeat(24),
+            codeVerifier = "v".repeat(43),
+            createdAtMillis = now + 1,
+        )
+        passport.hasRecoverableLogin shouldBe false
+        store.pending shouldBe null
+    }
+
+    test("every malformed persisted field is rejected and cleared before recovery") {
+        val valid = PendingPassportAuthorization(
+            state = "s".repeat(24),
+            nonce = "n".repeat(24),
+            codeVerifier = "v".repeat(43),
+            createdAtMillis = 1_000_000L,
+        )
+        listOf(
+            valid.copy(state = "short"),
+            valid.copy(nonce = "short"),
+            valid.copy(codeVerifier = "short"),
+        ).forEach { malformed ->
+            val store = MemoryPendingStore().apply { pending = malformed }
+            flow(store).hasRecoverableLogin shouldBe false
+            store.pending shouldBe null
+        }
+    }
+
+    test("malformed entropy fails before secure persistence or browser launch") {
+        listOf(0, 1, 2).forEach { malformedCall ->
+            val store = MemoryPendingStore()
+            var call = 0
+            val passport = PassportOidcFlow(
+                PassportOidcConfig(true, "https://auth.yaa3.com", "kittyecho-android", "kittyecho://auth"),
+                store,
+                randomBytes = { size ->
+                    if (call++ == malformedCall) ByteArray(1) else ByteArray(size) { 7 }
+                },
+                nowMillis = { 1_000_000L },
+            )
+
+            passport.begin().shouldBeInstanceOf<PassportStartResult.Unavailable>()
+            store.writeCalls shouldBe 0
+            store.pending shouldBe null
+        }
+    }
+
+    test("valid success callback may include an ignored bounded error description") {
+        val store = MemoryPendingStore()
+        val passport = flow(store)
+        val state = startState(passport)
+
+        passport.handleCallback(
+            "kittyecho://auth?code=authorization-code-123456&error_description=ignored&state=$state",
+        ).shouldBeInstanceOf<PassportCallback.AuthorizationCode>()
+        store.pending shouldBe null
+    }
+
     test("secure storage failure prevents opening the browser") {
         val store = MemoryPendingStore(canWrite = false)
         flow(store).begin().shouldBeInstanceOf<PassportStartResult.Unavailable>()
@@ -222,10 +309,12 @@ private class MemoryPendingStore(
     private val canWrite: Boolean = true,
 ) : PassportPendingStore {
     var pending: PendingPassportAuthorization? = null
+    var writeCalls: Int = 0
 
     override fun read(): PendingPassportAuthorization? = pending
 
     override fun write(pending: PendingPassportAuthorization): Boolean {
+        writeCalls += 1
         if (!canWrite) return false
         this.pending = pending
         return true

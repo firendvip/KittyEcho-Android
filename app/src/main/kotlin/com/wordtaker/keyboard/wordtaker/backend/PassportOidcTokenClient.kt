@@ -19,6 +19,8 @@ interface PassportOidcTokenApi {
     fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens
 
     fun refresh(refreshToken: String): OidcTokens
+
+    fun revoke(refreshToken: String)
 }
 
 /** Public native token endpoint client: no secret, no cookies, no redirects. */
@@ -32,6 +34,7 @@ class PassportOidcTokenClient(
         .followRedirects(false)
         .followSslRedirects(false)
         .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .build()
 
     override fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens {
@@ -59,6 +62,38 @@ class PassportOidcTokenClient(
                 .build(),
             previousRefreshToken = refreshToken,
         )
+    }
+
+    override fun revoke(refreshToken: String) {
+        val config = requireConfig()
+        if (!TOKEN.matches(refreshToken)) throw malformedResponse()
+        val request = Request.Builder()
+            .url(config.revocationEndpoint)
+            .post(
+                FormBody.Builder()
+                    .add("client_id", config.clientId)
+                    .add("token", refreshToken)
+                    .build(),
+            )
+            .header("Accept", "application/json")
+            .build()
+        val response = try {
+            http.newCall(request).execute()
+        } catch (error: InterruptedIOException) {
+            throw BackendException(BackendException.Kind.TIMEOUT, "OIDC revoke timeout", cause = error)
+        } catch (error: IOException) {
+            throw BackendException(BackendException.Kind.NETWORK, "OIDC revoke network error", cause = error)
+        }
+        response.use {
+            readBoundedBody(it.body)
+            if (!it.isSuccessful) {
+                throw BackendException(
+                    BackendException.Kind.HTTP,
+                    "OIDC revoke failed",
+                    status = it.code,
+                )
+            }
+        }
     }
 
     private fun tokenRequest(body: FormBody, previousRefreshToken: String? = null): OidcTokens {
@@ -143,6 +178,7 @@ class PassportOidcTokenClient(
 
     private companion object {
         const val CONNECT_TIMEOUT_SECONDS = 10L
+        const val CALL_TIMEOUT_SECONDS = 15L
         const val MAX_RESPONSE_BYTES = 64 * 1024L
         const val MIN_EXPIRES_SECONDS = 60L
         const val MAX_EXPIRES_SECONDS = 24 * 60 * 60L

@@ -157,7 +157,7 @@ internal fun AccountScreen(
                 if (!state.loggedIn) {
                     LoginSection(passportLogin, onMessage = ::show)
                 } else {
-                    LoggedInSection(repository, onMessage = ::show)
+                    LoggedInSection(repository, passportLogin, onMessage = ::show)
                 }
 
                 Spacer(Modifier.height(24.dp))
@@ -277,6 +277,7 @@ private fun LoginSection(
 @Composable
 private fun LoggedInSection(
     repository: AccountRepository,
+    passportLogin: PassportLoginController,
     onMessage: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -343,7 +344,7 @@ private fun LoggedInSection(
             }
             Spacer(Modifier.height(4.dp))
             TextButton(onClick = {
-                repository.logout()
+                passportLogin.logout()
                 onMessage("已退出登录")
             }) { Text("退出登录", color = MaterialTheme.colorScheme.error) }
         }

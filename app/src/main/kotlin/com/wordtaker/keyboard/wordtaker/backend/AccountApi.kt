@@ -49,6 +49,9 @@ interface AuthSessionStore {
         setOidc(tokens, account())
     }
 
+    /** Removes only central Passport credentials, preserving any legacy session. */
+    fun clearOidc()
+
     fun updateAccount(account: AccountInfo?)
 
     fun clear()

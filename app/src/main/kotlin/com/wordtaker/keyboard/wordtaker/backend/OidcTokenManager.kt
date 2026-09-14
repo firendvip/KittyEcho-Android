@@ -5,10 +5,16 @@ class OidcTokenManager(
     private val store: AuthSessionStore,
     private val legacyTokenProvider: () -> String?,
     private val tokenApi: PassportOidcTokenApi,
+    private val passportEnabled: Boolean = true,
     private val nowEpochSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
 ) {
+    init {
+        if (!passportEnabled) store.clearOidc()
+    }
+
     @Synchronized
     fun accessToken(): String? {
+        if (!passportEnabled) return legacyTokenProvider()
         val tokens = store.oidcTokens() ?: return legacyTokenProvider()
         if (tokens.expiresAtEpochSeconds > nowEpochSeconds() + REFRESH_SKEW_SECONDS) {
             return tokens.accessToken
@@ -18,12 +24,13 @@ class OidcTokenManager(
 
     @Synchronized
     fun refreshAfterUnauthorized(failedToken: String?): String? {
+        if (!passportEnabled) return null
         val tokens = store.oidcTokens() ?: return null
         if (failedToken != null && tokens.accessToken != failedToken) return tokens.accessToken
         return refresh(tokens, allowStillValidFallback = false)
     }
 
-    private fun refresh(tokens: OidcTokens, allowStillValidFallback: Boolean): String {
+    private fun refresh(tokens: OidcTokens, allowStillValidFallback: Boolean): String? {
         val refreshToken = tokens.refreshToken
         if (refreshToken == null) {
             if (allowStillValidFallback && tokens.expiresAtEpochSeconds > nowEpochSeconds()) {
@@ -33,11 +40,20 @@ class OidcTokenManager(
             throw expiredSession()
         }
         return try {
-            tokenApi.refresh(refreshToken).also(store::updateOidcTokens).accessToken
+            val refreshed = tokenApi.refresh(refreshToken)
+            synchronized(store) {
+                val current = store.oidcTokens()
+                if (current != tokens) return current?.accessToken
+                store.updateOidcTokens(refreshed)
+                refreshed.accessToken
+            }
         } catch (error: BackendException) {
-            if (error.isAuthExpired) {
-                store.clear()
-            } else if (allowStillValidFallback && tokens.expiresAtEpochSeconds > nowEpochSeconds()) {
+            synchronized(store) {
+                val current = store.oidcTokens()
+                if (current != tokens) return current?.accessToken
+                if (error.isAuthExpired) store.clear()
+            }
+            if (!error.isAuthExpired && allowStillValidFallback && tokens.expiresAtEpochSeconds > nowEpochSeconds()) {
                 return tokens.accessToken
             }
             throw error

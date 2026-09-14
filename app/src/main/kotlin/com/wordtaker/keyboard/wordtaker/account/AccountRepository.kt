@@ -124,6 +124,30 @@ class AccountRepository(
             persist = { result -> tokenStore.setOidc(tokens, result.account) },
         )
 
+    internal suspend fun loginWithOidc(
+        tokens: OidcTokens,
+        expectedGeneration: Long,
+    ): AccountResult<Unit> =
+        login(
+            expectedGeneration = expectedGeneration,
+            block = {
+                LoginResult(
+                    accessToken = tokens.accessToken,
+                    account = null,
+                    isNew = false,
+                    cloudRemaining = null,
+                    deviceGift = null,
+                )
+            },
+            persist = { result -> tokenStore.setOidc(tokens, result.account) },
+        )
+
+    internal fun authenticationGeneration(): Long = sessionGeneration.get()
+
+    internal fun invalidatePendingAuthentication() {
+        sessionGeneration.incrementAndGet()
+    }
+
     /** 登录态内刷新账号摘要；失败进入可理解、可重试的资料不可用状态。 */
     suspend fun refreshAccount(): AccountResult<Unit> = withContext(ioDispatcher) {
         val expectedGeneration = synchronized(sessionLock) {
@@ -160,6 +184,13 @@ class AccountRepository(
         invalidateAuthentication()
     }
 
+    internal fun logoutForPassport(): String? =
+        synchronized(sessionLock) {
+            val refreshToken = tokenStore.oidcTokens()?.refreshToken
+            invalidateAuthenticationLocked()
+            refreshToken
+        }
+
     /** Confirmed authentication expiry must update storage and StateFlow together. */
     fun invalidateAuthentication() {
         synchronized(sessionLock) {
@@ -175,14 +206,14 @@ class AccountRepository(
 
     /** Login success always hydrates /auth/me here, never from a page-mount side effect. */
     private suspend fun login(
+        expectedGeneration: Long = sessionGeneration.get(),
         persist: (LoginResult) -> Unit = { result -> tokenStore.set(result.accessToken, result.account) },
         block: () -> LoginResult,
     ): AccountResult<Unit> =
         withContext(ioDispatcher) {
-            val requestGeneration = sessionGeneration.get()
             try {
                 val result = block()
-                val generation = persistLogin(result, requestGeneration, persist)
+                val generation = persistLogin(result, expectedGeneration, persist)
                     ?: return@withContext AccountResult.Err(MESSAGE_SESSION_CHANGED)
                 when (val hydration = hydrateProfile(generation)) {
                     is AccountResult.Ok -> hydration
@@ -190,7 +221,7 @@ class AccountRepository(
                         if (_state.value.loggedIn) AccountResult.Ok(Unit) else hydration
                 }
             } catch (e: BackendException) {
-                backendFailure(e, requestGeneration)
+                backendFailure(e, expectedGeneration)
             } catch (_: Exception) {
                 AccountResult.Err(MESSAGE_REQUEST_FAILED)
             }

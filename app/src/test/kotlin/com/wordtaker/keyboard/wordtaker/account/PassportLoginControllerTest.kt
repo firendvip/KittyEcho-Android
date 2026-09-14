@@ -16,9 +16,15 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PassportLoginControllerTest : FunSpec({
@@ -42,6 +48,34 @@ class PassportLoginControllerTest : FunSpec({
         pending.value shouldBe null
     }
 
+    test("default-off callback performs no central request and no legacy fallback") {
+        runTest {
+            val pending = ControllerPendingStore(
+                PendingPassportAuthorization("s".repeat(24), "n".repeat(24), "v".repeat(43), 1_000L),
+            )
+            val store = ControllerAuthStore()
+            val api = ControllerAccountApi()
+            val tokens = ControllerTokenApi()
+            val controller = PassportLoginController(
+                PassportOidcFlow(
+                    PassportOidcConfig(false, "https://auth.yaa3.com", "kittyecho-android", "kittyecho://auth"),
+                    pending,
+                    nowMillis = { 1_000L },
+                ),
+                tokens,
+                AccountRepository(api, store, scope = backgroundScope),
+                StandardTestDispatcher(testScheduler),
+            )
+
+            controller.handleCallback(
+                "kittyecho://auth?code=authorization-code-123456&state=${"s".repeat(24)}",
+            ).shouldBeInstanceOf<AccountResult.Err>()
+            tokens.exchangeCalls shouldBe 0
+            api.legacyLoginCalls shouldBe 0
+            pending.value shouldBe null
+        }
+    }
+
     test("cold-start recovery remains visible and cancellation clears it") {
         val pending = ControllerPendingStore(
             PendingPassportAuthorization("s".repeat(24), "n".repeat(24), "v".repeat(43), 1_000L),
@@ -52,6 +86,142 @@ class PassportLoginControllerTest : FunSpec({
         fixture.controller.cancel()
         fixture.controller.status.value shouldBe PassportLoginStatus.Idle
         pending.value shouldBe null
+    }
+
+    test("cold-start rejects expired persisted state before exposing browser recovery") {
+        val pending = ControllerPendingStore(
+            PendingPassportAuthorization(
+                "s".repeat(24),
+                "n".repeat(24),
+                "v".repeat(43),
+                1_000L - PassportOidcFlow.PENDING_TTL_MS - 1,
+            ),
+        )
+        val fixture = fixture(pending)
+
+        fixture.controller.status.value shouldBe PassportLoginStatus.Idle
+        pending.value shouldBe null
+    }
+
+    test("cold-start callback consumes state once and never exchanges a replay") {
+        runTest {
+            val pending = ControllerPendingStore()
+            val first = fixture(pending, StandardTestDispatcher(testScheduler))
+            first.controller.begin()
+            val state = pending.value!!.state
+
+            val recreated = fixture(pending, StandardTestDispatcher(testScheduler))
+            recreated.controller.status.value shouldBe PassportLoginStatus.AwaitingBrowser
+            val callback = "kittyecho://auth?code=authorization-code-123456&state=$state"
+            recreated.controller.handleCallback(callback).shouldBeInstanceOf<AccountResult.Ok<Unit>>()
+            recreated.controller.handleCallback(callback).shouldBeInstanceOf<AccountResult.Err>()
+
+            recreated.tokens.exchangeCalls shouldBe 1
+            pending.value shouldBe null
+        }
+    }
+
+    test("explicit logout clears local state before best-effort family revocation") {
+        runTest {
+            val fixture = fixture(dispatcher = StandardTestDispatcher(testScheduler))
+            fixture.controller.begin()
+            fixture.store.set("legacy-session", null)
+            fixture.store.setOidc(OidcTokens("session-a", "family-a", 2_000L), null)
+            fixture.tokens.onRevoke = {
+                fixture.pending.value shouldBe null
+                fixture.store.isLoggedIn() shouldBe false
+                fixture.controller.status.value shouldBe PassportLoginStatus.Idle
+            }
+
+            fixture.controller.logout()
+
+            fixture.pending.value shouldBe null
+            fixture.store.isLoggedIn() shouldBe false
+            fixture.store.oidc shouldBe null
+            fixture.controller.status.value shouldBe PassportLoginStatus.Idle
+            fixture.tokens.revokeCalls shouldBe emptyList()
+            advanceUntilIdle()
+            fixture.tokens.revokeCalls shouldBe listOf("family-a")
+        }
+    }
+
+    test("disabled logout stays local and a failed revocation never restores credentials") {
+        runTest {
+            val disabledPending = ControllerPendingStore(
+                PendingPassportAuthorization("s".repeat(24), "n".repeat(24), "v".repeat(43), 1_000L),
+            )
+            val disabledStore = ControllerAuthStore().apply {
+                setOidc(OidcTokens("session-a", "family-a", 2_000L), null)
+            }
+            val disabledTokens = ControllerTokenApi()
+            val disabled = PassportLoginController(
+                PassportOidcFlow(
+                    PassportOidcConfig(false, "https://auth.yaa3.com", "kittyecho-android", "kittyecho://auth"),
+                    disabledPending,
+                    nowMillis = { 1_000L },
+                ),
+                disabledTokens,
+                AccountRepository(disabledTokens.accountApi, disabledStore, scope = backgroundScope),
+                StandardTestDispatcher(testScheduler),
+            )
+            disabled.logout()
+            advanceUntilIdle()
+            disabledTokens.revokeCalls shouldBe emptyList()
+            disabledStore.isLoggedIn() shouldBe false
+            disabledPending.value shouldBe null
+
+            val enabled = fixture(dispatcher = StandardTestDispatcher(testScheduler))
+            enabled.store.setOidc(OidcTokens("session-b", "family-b", 2_000L), null)
+            enabled.tokens.revokeFailure = IllegalStateException("private revoke detail")
+            enabled.controller.logout()
+            advanceUntilIdle()
+            enabled.tokens.revokeCalls shouldBe listOf("family-b")
+            enabled.store.isLoggedIn() shouldBe false
+            enabled.store.oidc shouldBe null
+            enabled.controller.status.value shouldBe PassportLoginStatus.Idle
+        }
+    }
+
+    test("logout racing a callback exchange prevents late token persistence and keeps idle state") {
+        val pending = ControllerPendingStore()
+        var generated = 0
+        val flow = PassportOidcFlow(
+            PassportOidcConfig(true, "https://auth.yaa3.com", "kittyecho-android", "kittyecho://auth"),
+            pending,
+            randomBytes = { size -> ByteArray(size) { (generated++ and 0xff).toByte() } },
+            nowMillis = { 1_000L },
+        )
+        val store = ControllerAuthStore()
+        val accountApi = ControllerAccountApi()
+        val repository = AccountRepository(accountApi, store, ioDispatcher = Dispatchers.IO)
+        val tokenApi = BlockingControllerTokenApi()
+        val controller = PassportLoginController(flow, tokenApi, repository, Dispatchers.IO)
+        controller.begin()
+        val state = pending.value!!.state
+        val executor = Executors.newSingleThreadExecutor()
+
+        try {
+            val result = executor.submit<AccountResult<Unit>> {
+                runBlocking {
+                    controller.handleCallback(
+                        "kittyecho://auth?code=authorization-code-123456&state=$state",
+                    )
+                }
+            }
+            tokenApi.exchangeEntered.await(5, TimeUnit.SECONDS) shouldBe true
+
+            controller.logout()
+            tokenApi.allowExchangeToFinish.countDown()
+
+            result.get(5, TimeUnit.SECONDS).shouldBeInstanceOf<AccountResult.Err>()
+            pending.value shouldBe null
+            store.isLoggedIn() shouldBe false
+            store.oidc shouldBe null
+            controller.status.value shouldBe PassportLoginStatus.Idle
+        } finally {
+            tokenApi.allowExchangeToFinish.countDown()
+            executor.shutdownNow()
+        }
     }
 
     test("a valid callback exchanges PKCE code, stores rotating tokens and hydrates profile") {
@@ -175,8 +345,14 @@ private class ControllerTokenApi : PassportOidcTokenApi {
     var failure: Throwable? = null
     var exchangedCode: String? = null
     var exchangedVerifier: String? = null
+    var exchangeCalls: Int = 0
+    var revokeFailure: Throwable? = null
+    var onRevoke: (() -> Unit)? = null
+    val revokeCalls = mutableListOf<String>()
+    val accountApi = ControllerAccountApi()
 
     override fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens {
+        exchangeCalls += 1
         failure?.let { throw it }
         exchangedCode = code
         exchangedVerifier = codeVerifier
@@ -184,11 +360,32 @@ private class ControllerTokenApi : PassportOidcTokenApi {
     }
 
     override fun refresh(refreshToken: String): OidcTokens = next
+
+    override fun revoke(refreshToken: String) {
+        revokeCalls += refreshToken
+        onRevoke?.invoke()
+        revokeFailure?.let { throw it }
+    }
+}
+
+private class BlockingControllerTokenApi : PassportOidcTokenApi {
+    val exchangeEntered = CountDownLatch(1)
+    val allowExchangeToFinish = CountDownLatch(1)
+
+    override fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens {
+        exchangeEntered.countDown()
+        check(allowExchangeToFinish.await(5, TimeUnit.SECONDS))
+        return OidcTokens("session-a", "family-a", 2_000L)
+    }
+
+    override fun refresh(refreshToken: String): OidcTokens = error("not used")
+
+    override fun revoke(refreshToken: String) = Unit
 }
 
 private class ControllerAuthStore : AuthSessionStore {
-    var oidc: OidcTokens? = null
-    private var profile: AccountInfo? = null
+    @Volatile var oidc: OidcTokens? = null
+    @Volatile private var profile: AccountInfo? = null
     override fun isLoggedIn(): Boolean = oidc != null
     override fun account(): AccountInfo? = profile
     override fun set(accessToken: String, account: AccountInfo?) = Unit
@@ -199,6 +396,10 @@ private class ControllerAuthStore : AuthSessionStore {
     override fun oidcTokens(): OidcTokens? = oidc
     override fun updateOidcTokens(tokens: OidcTokens) {
         oidc = tokens
+    }
+    override fun clearOidc() {
+        oidc = null
+        profile = null
     }
     override fun updateAccount(account: AccountInfo?) {
         profile = account

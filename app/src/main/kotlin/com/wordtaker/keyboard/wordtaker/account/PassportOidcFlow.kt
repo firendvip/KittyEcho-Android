@@ -54,6 +54,7 @@ internal data class ValidPassportOidcConfig(
 ) {
     val authorizationEndpoint: String = "$issuer/oauth2/authorize"
     val tokenEndpoint: String = "$issuer/oauth2/token"
+    val revocationEndpoint: String = "$issuer/oauth2/revoke"
 }
 
 data class PendingPassportAuthorization(
@@ -104,7 +105,13 @@ class PassportOidcFlow(
         get() = config.validated() != null
 
     val hasRecoverableLogin: Boolean
-        get() = validPending(clearInvalid = true) != null
+        get() {
+            if (!isAvailable) {
+                pendingStore.clear()
+                return false
+            }
+            return validPending(clearInvalid = true) != null
+        }
 
     fun begin(): PassportStartResult {
         val valid = config.validated()

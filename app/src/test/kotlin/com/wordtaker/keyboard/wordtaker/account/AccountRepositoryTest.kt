@@ -443,6 +443,14 @@ private class FakeAuthSessionStore(
         oidcSession = tokens
     }
 
+    override fun clearOidc() {
+        if (oidcSession != null) {
+            token = null
+            oidcSession = null
+            storedAccount = null
+        }
+    }
+
     override fun updateAccount(account: AccountInfo?) {
         storedAccount = account
     }
@@ -482,6 +490,8 @@ private class BlockingProfileUpdateStore(
         token = null
         storedAccount = null
     }
+
+    override fun clearOidc() = Unit
 }
 
 private class FakeAccountApi : AccountApi {

@@ -78,10 +78,14 @@ class PassportOidcTokenClientTest : FunSpec({
 
     test("malformed successes and OAuth errors fail closed with sanitized categories") {
         val invalidBodies = listOf(
+            "not-json",
             "{}",
-            """{"access_token":"a","token_type":"mac","expires_in":900,"scope":"openid profile offline_access aim.api"}""",
-            """{"access_token":"access","token_type":"Bearer","expires_in":0,"scope":"openid profile offline_access aim.api"}""",
-            """{"access_token":"access","token_type":"Bearer","expires_in":900,"scope":"openid profile"}""",
+            """{"access_token":"access-123","token_type":"mac","expires_in":900,"scope":"openid profile offline_access aim.api"}""",
+            """{"access_token":"access-123","token_type":"Bearer","expires_in":59,"scope":"openid profile offline_access aim.api"}""",
+            """{"access_token":"access-123","token_type":"Bearer","expires_in":86401,"scope":"openid profile offline_access aim.api"}""",
+            """{"access_token":"access-123","token_type":"Bearer","expires_in":900,"scope":"openid profile"}""",
+            """{"access_token":"access-123","token_type":"Bearer","expires_in":900,"scope":"openid profile offline_access aim.api openid"}""",
+            """{"access_token":"access-123","refresh_token":"short","token_type":"Bearer","expires_in":900,"scope":"openid profile offline_access aim.api"}""",
         )
         invalidBodies.forEach { body ->
             server.enqueue(MockResponse().setBody(body))
@@ -104,7 +108,12 @@ class PassportOidcTokenClientTest : FunSpec({
         shouldThrow<BackendException> {
             configured.exchangeAuthorizationCode("short", "v".repeat(43))
         }
+        shouldThrow<BackendException> {
+            configured.exchangeAuthorizationCode("authorization-code-123456", "short")
+        }
         shouldThrow<BackendException> { configured.refresh("short") }.isAuthExpired shouldBe true
+        shouldThrow<BackendException> { configured.refresh("refresh token with spaces") }
+            .isAuthExpired shouldBe true
         server.requestCount shouldBe 0
 
         val invalid = PassportOidcTokenClient(
@@ -126,6 +135,16 @@ class PassportOidcTokenClientTest : FunSpec({
         unavailable.kind shouldBe BackendException.Kind.HTTP
         unavailable.code shouldBe "temporarily_unavailable"
         unavailable.message?.contains("private detail") shouldBe false
+
+        server.enqueue(
+            MockResponse().setResponseCode(400)
+                .setBody("""{"error":"bad-error","error_description":"private detail"}"""),
+        )
+        val malformedError = shouldThrow<BackendException> {
+            client(server).exchangeAuthorizationCode("authorization-code-123456", "v".repeat(43))
+        }
+        malformedError.code shouldBe null
+        malformedError.message?.contains("private detail") shouldBe false
 
         server.enqueue(MockResponse().setBody("x".repeat(65 * 1024)))
         shouldThrow<BackendException> {
@@ -150,6 +169,81 @@ class PassportOidcTokenClientTest : FunSpec({
         }
         error.kind shouldBe BackendException.Kind.NETWORK
         error.friendlyMessage() shouldBe "无法连接服务器，请检查网络"
+    }
+
+    test("expiry boundaries, sparse spacing and an absent refresh token are accepted exactly") {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"access_token":"access-min","token_type":"Bearer","expires_in":60,"scope":"openid  profile offline_access aim.api"}""",
+            ),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                """{"access_token":"access-max","refresh_token":"refresh-max","token_type":"Bearer","expires_in":86400,"scope":"openid profile offline_access aim.api"}""",
+            ),
+        )
+        val client = client(server)
+
+        client.exchangeAuthorizationCode(
+            "authorization-code-123456",
+            "v".repeat(43),
+        ) shouldBe OidcTokens("access-min", null, 1_060L)
+        client.exchangeAuthorizationCode(
+            "authorization-code-123456",
+            "v".repeat(43),
+        ) shouldBe OidcTokens("access-max", "refresh-max", 87_400L)
+    }
+
+    test("token endpoint redirects and empty error bodies are not followed or trusted") {
+        server.enqueue(
+            MockResponse().setResponseCode(302)
+                .setHeader("Location", server.url("/credential-sink")),
+        )
+        val redirect = shouldThrow<BackendException> {
+            client(server).exchangeAuthorizationCode("authorization-code-123456", "v".repeat(43))
+        }
+        redirect.status shouldBe 302
+        server.requestCount shouldBe 1
+
+        server.enqueue(MockResponse().setResponseCode(500).setBody(""))
+        val empty = shouldThrow<BackendException> {
+            client(server).exchangeAuthorizationCode("authorization-code-123456", "v".repeat(43))
+        }
+        empty.code shouldBe null
+        empty.status shouldBe 500
+    }
+
+    test("revocation is a public form request without credentials and accepts an unknown family") {
+        server.enqueue(MockResponse().setBody("{}"))
+        val client = client(server)
+
+        client.revoke("refresh-family-1")
+
+        val request = server.takeRequest()
+        request.path shouldBe "/oauth2/revoke"
+        request.method shouldBe "POST"
+        request.getHeader("Authorization") shouldBe null
+        val body = form(request.body.readUtf8())
+        body shouldBe mapOf(
+            "client_id" to "kittyecho-android",
+            "token" to "refresh-family-1",
+        )
+        body.containsKey("client_secret") shouldBe false
+    }
+
+    test("invalid revocation input fails locally and server errors stay sanitized") {
+        val client = client(server)
+        shouldThrow<BackendException> { client.revoke("short") }
+        server.requestCount shouldBe 0
+
+        server.enqueue(
+            MockResponse().setResponseCode(503)
+                .setBody("""{"error":"temporarily_unavailable","detail":"private"}"""),
+        )
+        val error = shouldThrow<BackendException> { client.revoke("refresh-family-1") }
+        error.kind shouldBe BackendException.Kind.HTTP
+        error.status shouldBe 503
+        error.message?.contains("private") shouldBe false
     }
 })
 

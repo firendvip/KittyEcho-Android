@@ -90,7 +90,12 @@ object AppGraph {
     private val passportTokenClient by lazy { PassportOidcTokenClient(passportConfig) }
 
     private val oidcTokenManager by lazy {
-        OidcTokenManager(tokenStore, tokenStore::accessToken, passportTokenClient)
+        OidcTokenManager(
+            store = tokenStore,
+            legacyTokenProvider = tokenStore::legacyAccessToken,
+            tokenApi = passportTokenClient,
+            passportEnabled = passportConfig.enabled,
+        )
     }
 
     val backendClient: BackendClient by lazy {
