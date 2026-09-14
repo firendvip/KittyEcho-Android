@@ -6,6 +6,7 @@ import com.wordtaker.keyboard.wordtaker.backend.AuthSessionStore
 import com.wordtaker.keyboard.wordtaker.backend.BackendException
 import com.wordtaker.keyboard.wordtaker.backend.LoginResult
 import com.wordtaker.keyboard.wordtaker.backend.OrderInfo
+import com.wordtaker.keyboard.wordtaker.backend.OidcTokens
 import com.wordtaker.keyboard.wordtaker.backend.PlanInfo
 import com.wordtaker.keyboard.wordtaker.backend.PolishOutcome
 import com.wordtaker.keyboard.wordtaker.backend.QuotaInfo
@@ -79,6 +80,25 @@ class AccountRepositoryTest : FunSpec({
             repository.state.value.profile
                 .shouldBeInstanceOf<AccountProfileState.Available>()
                 .account.userId shouldBe "returning-user"
+        }
+    }
+
+    test("central OIDC login persists rotating tokens before profile hydration") {
+        runTest {
+            val api = FakeAccountApi().apply {
+                authMeResponses += {
+                    JSONObject("""{"account":{"userId":"passport-user","phone":"13800138000"}}""")
+                }
+            }
+            val store = FakeAuthSessionStore()
+            val repository = repository(api, store)
+            val tokens = OidcTokens("oidc-access", "oidc-refresh", 2_000L)
+
+            repository.loginWithOidc(tokens).shouldBeInstanceOf<AccountResult.Ok<Unit>>()
+
+            store.oidcSession shouldBe tokens
+            store.token shouldBe "oidc-access"
+            repository.state.value.account?.userId shouldBe "passport-user"
         }
     }
 
@@ -399,13 +419,28 @@ private class FakeAuthSessionStore(
     var token: String? = null,
     private var storedAccount: AccountInfo? = null,
 ) : AuthSessionStore {
+    var oidcSession: OidcTokens? = null
     override fun isLoggedIn(): Boolean = !token.isNullOrBlank()
 
     override fun account(): AccountInfo? = storedAccount
 
     override fun set(accessToken: String, account: AccountInfo?) {
         token = accessToken
+        oidcSession = null
         storedAccount = account
+    }
+
+    override fun setOidc(tokens: OidcTokens, account: AccountInfo?) {
+        token = tokens.accessToken
+        oidcSession = tokens
+        storedAccount = account
+    }
+
+    override fun oidcTokens(): OidcTokens? = oidcSession
+
+    override fun updateOidcTokens(tokens: OidcTokens) {
+        token = tokens.accessToken
+        oidcSession = tokens
     }
 
     override fun updateAccount(account: AccountInfo?) {
@@ -414,6 +449,7 @@ private class FakeAuthSessionStore(
 
     override fun clear() {
         token = null
+        oidcSession = null
         storedAccount = null
     }
 }

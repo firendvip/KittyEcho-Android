@@ -100,6 +100,65 @@ class BackendClientTest : FunSpec({
         e.isAuthExpired shouldBe true
     }
 
+    test("an authenticated 401 refreshes once and retries with the rotated access token") {
+        server.enqueue(
+            MockResponse().setResponseCode(401)
+                .setBody("""{"code":"NOT_LOGGED_IN"}"""),
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                """{"success":true,"data":{"registered":true,"cloudRemaining":9}}""",
+            ),
+        )
+        token = listOf("expired", "access").joinToString("-")
+        var failedToken: String? = null
+        val refreshingClient = BackendClient(
+            deviceId = DEVICE_ID,
+            tokenProvider = { token },
+            tokenRefresher = {
+                failedToken = it
+                "rotated-access"
+            },
+            baseUrl = server.url("/aiapi").toString(),
+        )
+
+        refreshingClient.getQuota().cloudRemaining shouldBe 9L
+        failedToken shouldBe "expired-access"
+        server.takeRequest().getHeader("Authorization") shouldBe "Bearer expired-access"
+        server.takeRequest().getHeader("Authorization") shouldBe "Bearer rotated-access"
+    }
+
+    test("anonymous requests and unchanged refresh results are never replayed") {
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+        var refreshCalls = 0
+        val anonymous = BackendClient(
+            deviceId = DEVICE_ID,
+            tokenProvider = { null },
+            tokenRefresher = {
+                refreshCalls += 1
+                "unexpected"
+            },
+            baseUrl = server.url("/aiapi").toString(),
+        )
+        shouldThrow<BackendException> { anonymous.getQuota() }
+        refreshCalls shouldBe 0
+        server.requestCount shouldBe 1
+
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{}"))
+        val unchanged = BackendClient(
+            deviceId = DEVICE_ID,
+            tokenProvider = { "same-token" },
+            tokenRefresher = {
+                refreshCalls += 1
+                "same-token"
+            },
+            baseUrl = server.url("/aiapi").toString(),
+        )
+        shouldThrow<BackendException> { unchanged.getQuota() }
+        refreshCalls shouldBe 1
+        server.requestCount shouldBe 2
+    }
+
     test("network failure maps to NETWORK kind") {
         server.shutdown()
         val e = shouldThrow<BackendException> { client().getQuota() }

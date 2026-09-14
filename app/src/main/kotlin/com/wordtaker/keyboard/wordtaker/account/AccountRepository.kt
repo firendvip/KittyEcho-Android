@@ -6,6 +6,7 @@ import com.wordtaker.keyboard.wordtaker.backend.AccountInfoJson
 import com.wordtaker.keyboard.wordtaker.backend.AuthSessionStore
 import com.wordtaker.keyboard.wordtaker.backend.BackendException
 import com.wordtaker.keyboard.wordtaker.backend.LoginResult
+import com.wordtaker.keyboard.wordtaker.backend.OidcTokens
 import com.wordtaker.keyboard.wordtaker.backend.PlanInfo
 import com.wordtaker.keyboard.wordtaker.backend.QuotaInfo
 import com.wordtaker.keyboard.wordtaker.backend.WechatAuthUrl
@@ -108,6 +109,21 @@ class AccountRepository(
     suspend fun loginWithWechatCode(code: String): AccountResult<Unit> =
         login { client.authWechatLogin(code) }
 
+    /** Completes central Passport login without exposing an OIDC token to the UI. */
+    suspend fun loginWithOidc(tokens: OidcTokens): AccountResult<Unit> =
+        login(
+            block = {
+                LoginResult(
+                    accessToken = tokens.accessToken,
+                    account = null,
+                    isNew = false,
+                    cloudRemaining = null,
+                    deviceGift = null,
+                )
+            },
+            persist = { result -> tokenStore.setOidc(tokens, result.account) },
+        )
+
     /** 登录态内刷新账号摘要；失败进入可理解、可重试的资料不可用状态。 */
     suspend fun refreshAccount(): AccountResult<Unit> = withContext(ioDispatcher) {
         val expectedGeneration = synchronized(sessionLock) {
@@ -158,12 +174,15 @@ class AccountRepository(
     }
 
     /** Login success always hydrates /auth/me here, never from a page-mount side effect. */
-    private suspend fun login(block: () -> LoginResult): AccountResult<Unit> =
+    private suspend fun login(
+        persist: (LoginResult) -> Unit = { result -> tokenStore.set(result.accessToken, result.account) },
+        block: () -> LoginResult,
+    ): AccountResult<Unit> =
         withContext(ioDispatcher) {
             val requestGeneration = sessionGeneration.get()
             try {
                 val result = block()
-                val generation = persistLogin(result, requestGeneration)
+                val generation = persistLogin(result, requestGeneration, persist)
                     ?: return@withContext AccountResult.Err(MESSAGE_SESSION_CHANGED)
                 when (val hydration = hydrateProfile(generation)) {
                     is AccountResult.Ok -> hydration
@@ -177,10 +196,14 @@ class AccountRepository(
             }
         }
 
-    private fun persistLogin(result: LoginResult, expectedGeneration: Long): Long? =
+    private fun persistLogin(
+        result: LoginResult,
+        expectedGeneration: Long,
+        persist: (LoginResult) -> Unit,
+    ): Long? =
         synchronized(sessionLock) {
             if (sessionGeneration.get() != expectedGeneration) return@synchronized null
-            tokenStore.set(result.accessToken, result.account)
+            persist(result)
             val generation = sessionGeneration.incrementAndGet()
             _state.update { current ->
                 current.copy(profile = AccountProfileState.Loading)

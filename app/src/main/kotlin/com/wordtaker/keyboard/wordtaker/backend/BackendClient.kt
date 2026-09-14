@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 class BackendClient(
     private val deviceId: String,
     private val tokenProvider: () -> String?,
+    private val tokenRefresher: ((failedToken: String) -> String?)? = null,
     baseUrl: String = BackendConfig.BASE_URL + BackendConfig.API_PREFIX,
     client: OkHttpClient? = null,
 ) : AccountApi {
@@ -243,49 +244,57 @@ class BackendClient(
         body: JSONObject? = null,
         timeoutMs: Long = BackendConfig.REQUEST_TIMEOUT_MS,
     ): JSONObject? {
-        val builder = Request.Builder()
-            .url(baseUrl + pathname)
-            .addHeader("Content-Type", "application/json")
-            .addHeader("x-device-id", deviceId)
-            .addHeader("x-platform", BackendConfig.PLATFORM)
-        tokenProvider()?.takeIf { it.isNotBlank() }?.let {
-            builder.addHeader("Authorization", "Bearer $it")
-        }
-        val request = when (method) {
-            "GET" -> builder.get()
-            else -> builder.method(method, (body ?: JSONObject()).toString().toRequestBody(JSON))
-        }.build()
-
-        val call = http.newBuilder()
-            .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
-            .build()
-            .newCall(request)
-
-        val response = try {
-            call.execute()
-        } catch (e: InterruptedIOException) {
-            throw BackendException(BackendException.Kind.TIMEOUT, "后端请求超时", cause = e)
-        } catch (e: IOException) {
-            throw BackendException(
-                BackendException.Kind.NETWORK, "无法连接后端: ${e.message}", cause = e,
-            )
-        }
-
-        response.use { res ->
-            val text = runCatching { res.body?.string() }.getOrNull().orEmpty()
-            val json = runCatching { if (text.isNotBlank()) JSONObject(text) else null }.getOrNull()
-            if (!res.isSuccessful) {
-                // 后端业务错误体形如 { code, message } 或 NestJS 默认 { statusCode, message }
-                val code = json?.optString("code")?.takeIf { it.isNotBlank() }
-                    ?: json?.optString("error")?.takeIf { it.isNotBlank() }
-                val message = json?.optString("message")?.takeIf { it.isNotBlank() }
-                    ?: "后端错误 HTTP ${res.code}"
+        val bodyText = (body ?: JSONObject()).toString()
+        var token = tokenProvider()?.takeIf(String::isNotBlank)
+        repeat(MAX_AUTH_ATTEMPTS) { attempt ->
+            val builder = Request.Builder()
+                .url(baseUrl + pathname)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("x-device-id", deviceId)
+                .addHeader("x-platform", BackendConfig.PLATFORM)
+            token?.let { builder.addHeader("Authorization", "Bearer $it") }
+            val request = when (method) {
+                "GET" -> builder.get()
+                else -> builder.method(method, bodyText.toRequestBody(JSON))
+            }.build()
+            val response = try {
+                http.newBuilder()
+                    .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                    .build()
+                    .newCall(request)
+                    .execute()
+            } catch (e: InterruptedIOException) {
+                throw BackendException(BackendException.Kind.TIMEOUT, "后端请求超时", cause = e)
+            } catch (e: IOException) {
                 throw BackendException(
-                    BackendException.Kind.HTTP, message, code = code, status = res.code,
+                    BackendException.Kind.NETWORK, "无法连接后端: ${e.message}", cause = e,
                 )
             }
-            return json
+
+            response.use { res ->
+                val text = runCatching { res.body?.string() }.getOrNull().orEmpty()
+                val json = runCatching { if (text.isNotBlank()) JSONObject(text) else null }.getOrNull()
+                if (res.code == 401 && attempt == 0 && token != null && tokenRefresher != null) {
+                    val refreshed = tokenRefresher.invoke(token!!)?.takeIf(String::isNotBlank)
+                    if (refreshed != null && refreshed != token) {
+                        token = refreshed
+                        return@repeat
+                    }
+                }
+                if (!res.isSuccessful) {
+                    // 后端业务错误体形如 { code, message } 或 NestJS 默认 { statusCode, message }
+                    val code = json?.optString("code")?.takeIf { it.isNotBlank() }
+                        ?: json?.optString("error")?.takeIf { it.isNotBlank() }
+                    val message = json?.optString("message")?.takeIf { it.isNotBlank() }
+                        ?: "后端错误 HTTP ${res.code}"
+                    throw BackendException(
+                        BackendException.Kind.HTTP, message, code = code, status = res.code,
+                    )
+                }
+                return json
+            }
         }
+        error("unreachable")
     }
 
     private fun JSONObject?.dataObject(): JSONObject = this?.optJSONObject("data") ?: JSONObject()
@@ -294,6 +303,7 @@ class BackendClient(
         const val CONNECT_TIMEOUT_SECONDS = 10L
         const val DICT_SUGGEST_TIMEOUT_MS = 500L
         const val MAX_DICT_SUGGEST_LIMIT = 10
+        const val MAX_AUTH_ATTEMPTS = 2
         val DICT_PINYIN = Regex("^[a-z]+$")
         val JSON = "application/json; charset=utf-8".toMediaType()
     }

@@ -138,9 +138,8 @@
             android:theme="@style/FlorisAppTheme"
             android:exported="false"/>
 
-        <!-- WordTaker account/billing screen. Exported + BROWSABLE only for the WeChat
-             OAuth deep link (kittyecho://auth?code=...); singleTask so the browser
-             redirect lands in the existing instance via onNewIntent. -->
+        <!-- Account/billing screen. Exported + BROWSABLE only for the exact registered
+             public-native OIDC callback; state + S256 PKCE are verified in-process. -->
         <activity
             android:name="com.wordtaker.keyboard.wordtaker.ui.WordTakerAccountActivity"
             android:label="@string/floris_app_name"

@@ -38,6 +38,17 @@ interface AuthSessionStore {
 
     fun set(accessToken: String, account: AccountInfo?)
 
+    /** OIDC credentials are always persisted as one encrypted, rotating session. */
+    fun setOidc(tokens: OidcTokens, account: AccountInfo?) {
+        set(tokens.accessToken, account)
+    }
+
+    fun oidcTokens(): OidcTokens? = null
+
+    fun updateOidcTokens(tokens: OidcTokens) {
+        setOidc(tokens, account())
+    }
+
     fun updateAccount(account: AccountInfo?)
 
     fun clear()

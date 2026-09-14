@@ -6,6 +6,18 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-09-14
+
+### Added
+- **望三通行证统一登录**：Android 账号页仅保留中央托管的手机号验证码与微信入口，使用系统浏览器执行 Authorization Code + S256 PKCE；严格校验一次性 state 与精确 `kittyecho://auth` 回调，并支持取消和冷启动恢复。
+- **OIDC 会话续期**：访问令牌临近过期时主动刷新，后端 401 时只允许刷新后重试一次；refresh token 轮换后立即更新本地会话。
+
+### Changed
+- **旧登录入口下线**：普通账号界面和输入法内账户摘要不再展示或回退到邮箱登录、邮箱地址、密码、旧短信或旧微信直连流程；旧接口与数据结构仅为兼容保留，不再由普通 UI 调用。
+
+### Security
+- **认证材料加密与默认关闭**：PKCE state/verifier 与 OIDC token 会话分别使用 Android Keystore AES-GCM 加密持久化；中央生产注册仍处于 `prepare` 阶段，因此 0.43.0 默认关闭统一登录，待中央验收后再通过构建配置启用。
+
 ## [0.42.0] - 2026-08-17
 
 ### Added

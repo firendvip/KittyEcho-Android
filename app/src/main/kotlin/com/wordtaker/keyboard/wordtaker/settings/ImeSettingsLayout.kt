@@ -286,8 +286,8 @@ fun ImeSettingsLayout(modifier: Modifier = Modifier) {
 
 /**
  * 「账户与额度」面板内子页 —— 只读展示：云端剩余额度 + 刷新、登录状态一行。
- * 键盘无法给自身设置面板的输入框打字，因此登录表单不内嵌；只有点击「登录/管理账户」
- * 才会真正 startActivity 到 [WordTakerAccountActivity]（那里才有可输入的邮箱/验证码框）。
+ * 统一认证不嵌入键盘面板；点击「登录/管理账户」后由
+ * [WordTakerAccountActivity] 在系统浏览器启动望三通行证。
  * 复用与主设置面板相同的 panelHeight，保证顶边像素在各态之间恒等、切换零跳动。
  */
 @Composable
@@ -415,7 +415,6 @@ private fun ImeAccountSubPage(
                     Text(
                         text = if (state.loggedIn) {
                             state.account?.nickname
-                                ?: state.account?.email
                                 ?: state.account?.phone
                                 ?: "已登录"
                         } else {
@@ -430,7 +429,7 @@ private fun ImeAccountSubPage(
 
             Spacer(Modifier.height(12.dp))
 
-            // 唯一必要的跳转：登录须要真实输入框（邮箱/验证码），键盘自身面板无法承载。
+            // 统一登录必须交给系统浏览器，键盘自身面板不承载认证页面。
             SettingsCard(cardBg) {
                 SelectRow(
                     title = if (state.loggedIn) "管理账户" else "登录 / 管理账户",
