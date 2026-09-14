@@ -285,6 +285,7 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.nimbus.jose.jwt)
     implementation(libs.okhttp)
     // sherpa-onnx (k2-fsa) on-device ASR. Official prebuilt AAR from GitHub releases
     // (no Maven Central artifact exists for com.k2-fsa). The AAR bundles the
