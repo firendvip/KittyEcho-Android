@@ -236,7 +236,7 @@ class PassportOidcFlow(
             Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
 
         private fun encode(value: String): String =
-            URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
+            URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 
         private fun parseUniqueQuery(rawQuery: String): Map<String, String>? {
             val values = linkedMapOf<String, String>()
@@ -251,7 +251,7 @@ class PassportOidcFlow(
         }
 
         private fun decode(value: String): String? = runCatching {
-            URLDecoder.decode(value, Charsets.UTF_8)
+            URLDecoder.decode(value, Charsets.UTF_8.name())
         }.getOrNull()
 
         private fun constantEquals(left: String, right: String): Boolean =

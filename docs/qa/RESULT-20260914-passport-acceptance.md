@@ -1,10 +1,10 @@
-# RESULT-20260914 · Passport 候选 5d246461 依赖、Lint 与真实 OIDC 前置验收
+# RESULT-20260914 · Passport 依赖、API 26 兼容、Lint 与真实 OIDC 前置验收
 
-- 候选：`5d246461a26b7ba7769f6a28e3d7738c057ba473`
-- 验收范围：`168b7de8`（Nimbus 依赖）→ `7d885f84`（ID token）→ `5d246461`（session/request barrier）
+- 基线候选：`5d246461a26b7ba7769f6a28e3d7738c057ba473`
+- 验收范围：`168b7de8`（Nimbus 依赖）→ `7d885f84`（ID token）→ `5d246461`（session/request barrier）→ `af507faa`（前置验收）→ 本报告所在的 API 26 兼容修复提交
 - 日期：2026-09-14（Asia/Shanghai）
 - 约束：未禁用 detector，未生成 baseline，未修改 Paraformer 或其他无关源码，未改版本，未发包/部署。
-- 总结：依赖安全查询无已知条目；Lint 工具崩溃可由受支持的独立 lint 版本覆写恢复，但完整项目仍有真实 lint 错误；真实生产 OIDC E2E 仍缺物理设备、启用候选、用户交互账号与生产注册/联通性验证。
+- 总结：依赖安全查询无已知条目；Passport URL 编解码已改用 API 26 可用的 charset-name overload，JVM 与 API 34 仪器回归通过，lint 32.2.1 的两个 Passport `NewApi` 已清零；本机没有 API 26–32 系统镜像，因此该版本段的真实运行证据仍缺。完整项目仍有 63 个边界外 lint 错误；真实生产 OIDC E2E 仍缺物理设备、启用候选、用户交互账号与生产注册/联通性验证。
 
 ## 1. Exact runtime 依赖与安全查询
 
@@ -79,16 +79,31 @@ Android 官方支持用 `android.experimental.lint.version` 独立升级 lint �
 ### 完整 lint 结果
 
 - `lintAnalyzeDebug`：PASS（不再崩溃）
-- `lintDebug`：FAIL，`65 errors / 240 warnings / 4 hints`
+- `lintDebug`：FAIL，`63 errors / 240 warnings / 4 hints`
 - 报告：`app/build/reports/lint-results-debug.html`
 - 首项为既有 `ParaformerAndroidInstallOps.kt:97` 的 `NewApi`；按本次边界未修改。
-- 候选三叶没有新增 lint 错误，但更早的 Passport 流代码（提交 `160ae75e`）存在两个与真实生产兼容性直接相关的 `NewApi`：
-  - `PassportOidcFlow.kt:239`：`URLEncoder.encode(String, Charset)` 要求 API 33。
-  - `PassportOidcFlow.kt:254`：`URLDecoder.decode(String, Charset)` 要求 API 33。
+- 修复前，更早的 Passport 流代码（提交 `160ae75e`）有两个与真实生产兼容性直接相关的 `NewApi`：
+  - `PassportOidcFlow.kt`：`URLEncoder.encode(String, Charset)` 要求 API 33。
+  - `PassportOidcFlow.kt`：`URLDecoder.decode(String, Charset)` 要求 API 33。
+- 修复后，二者均使用 API 26 可用的 charset-name overload；最新 text report 对 `PassportOidcFlow`、`URLEncoder`、`URLDecoder` 均为零命中。
 
-项目 minSdk 26，因此 API 26–32 的真实登录路径尚不能据此验收为安全。精确最小修复是改用旧平台可用的 charset-name overload，并补 API 26–32 回归；本验收未改代码。其余 63 个 lint error 属既有全项目清理范围，不能靠禁 detector、baseline 或忽略失败伪绿。
+项目 minSdk 26；本修复已清除 Passport 的静态 API 级别阻断。其余 63 个 lint error 属既有全项目清理范围，不能靠禁 detector、baseline 或忽略失败伪绿。
 
-## 3. 真实系统浏览器 OIDC E2E：已接线项与缺项
+## 3. API 兼容回归
+
+### TDD 与 JVM
+
+- RED：先加入 charset-name overload 静态合同、授权 URL 编码、callback percent-decoding、非法 percent escape 与非法 UTF-8 用例；完整 JVM 共 494 项，仅新增静态合同 1 项失败，证明旧实现仍调用 API 33 overload。
+- GREEN：仅改动两处 overload 后，完整 JVM `494/494 PASS`。
+- callback 路由仍严格匹配 `kittyecho://auth`；编码修复没有放宽 scheme、host、path、query 错误或 state 校验。
+
+### Android 运行证据
+
+- `connectedDebugAndroidTest` 指定 `emulator-5556`（Android 14 / API 34）执行 `PassportOidcFlowInstrumentedTest`：`1/1 PASS`，覆盖授权 URL 编码、callback 解码、非法 percent/UTF-8 拒绝。
+- 首次枚举两台设备时，`emulator-5554` 属性读取超时，未进入测试；指定响应正常的 `emulator-5556` 后通过。
+- 本机已安装并在线的两台模拟器均为 API 34；SDK 中没有 API 26–32 system image/AVD。本次按边界未下载镜像，因此 API 26–32 的真实运行验证为 `NOT RUN`，不能用 API 34 结果替代。
+
+## 4. 真实系统浏览器 OIDC E2E：已接线项与缺项
 
 ### 可复用既有配置/实现
 
@@ -105,7 +120,7 @@ Android 官方支持用 `android.experimental.lint.version` 独立升级 lint �
 
 ### 当前确切缺项/阻断
 
-1. **API 26–32 blocker**：先解决上节两个 Passport `NewApi`，否则不符合 minSdk 26 的生产承诺。
+1. **API 26–32 运行证据**：静态阻断已修复，但本机没有相应 system image/AVD；发布前应在 API 26–32 设备至少执行本节同一仪器回归。
 2. **启用候选**：生成 `-PwangsanPassportEnabled=true` 的最终候选并确认安装包 BuildConfig；当前默认和现有候选均为关闭。
 3. **真实物理设备**：当前 `adb devices` 只有 `emulator-5554`、`emulator-5556`，没有真机。需真机、可用系统浏览器、可访问中央 Passport/JWKS/业务后端的网络。
 4. **用户交互账号**：需一个允许生产验收的 Passport 账号，由用户本人在系统浏览器输入手机号验证码或完成微信确认；不得向验收者提供密码、验证码、access/refresh/ID token，也不由本任务发短信。
@@ -116,6 +131,8 @@ Android 官方支持用 `android.experimental.lint.version` 独立升级 lint �
 
 - 依赖门：**PASS（当前无已知 advisory；无运行时传递依赖）**
 - Lint 工具门：**PASS（32.2.1 可恢复完整分析）**
-- 产品 Lint 门：**FAIL（65 个既有错误；其中两个 Passport API 26–32 兼容性错误需在真实 E2E 前修复）**
+- Passport API 兼容静态/JVM 门：**PASS（两个 API 33 `NewApi` 已清零；494/494 JVM 通过）**
+- Android 兼容运行门：**PARTIAL（API 34 仪器测试 1/1 通过；API 26–32 无可用镜像，未运行）**
+- 产品 Lint 门：**FAIL（63 个边界外既有错误；Passport lint 零命中）**
 - 真实生产 OIDC E2E：**NOT RUN / BLOCKED BY INPUTS**
-- 发布：**NO-GO**，等待主干处理 Passport 两个最小兼容修复、真机/账号/生产注册联通性后再统一 GO。
+- 发布：**NO-GO**，等待 API 26–32 运行回归、真机/账号/生产注册联通性后再由主干统一 GO。

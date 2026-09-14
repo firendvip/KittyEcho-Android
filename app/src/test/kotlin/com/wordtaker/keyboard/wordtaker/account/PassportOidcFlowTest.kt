@@ -88,6 +88,12 @@ class PassportOidcFlowTest : FunSpec({
         query["response_type"] shouldBe listOf("code")
         query["scope"] shouldBe listOf("openid profile offline_access aim.api")
         query["code_challenge_method"] shouldBe listOf("S256")
+        URI(result.authorizationUrl).rawQuery.contains(
+            "redirect_uri=kittyecho%3A%2F%2Fauth",
+        ) shouldBe true
+        URI(result.authorizationUrl).rawQuery.contains(
+            "scope=openid%20profile%20offline_access%20aim.api",
+        ) shouldBe true
         query.getValue("state").single().length shouldBe 32
         query.getValue("nonce").single().length shouldBe 32
         query.getValue("code_challenge").single().length shouldBe 43
@@ -115,6 +121,31 @@ class PassportOidcFlowTest : FunSpec({
 
         passport.handleCallback("kittyecho://auth?code=$code&state=$state")
             .shouldBeInstanceOf<PassportCallback.Rejected>()
+    }
+
+    test("callback percent-decodes an authorization code without weakening exact routing") {
+        val store = MemoryPendingStore()
+        val passport = flow(store)
+        val state = startState(passport)
+
+        val accepted = passport.handleCallback(
+            "kittyecho://auth?code=authorization%2Dcode%2D123456&state=$state",
+        ).shouldBeInstanceOf<PassportCallback.AuthorizationCode>()
+
+        accepted.code shouldBe "authorization-code-123456"
+        store.pending shouldBe null
+    }
+
+    test("callback rejects malformed percent escapes and malformed UTF-8") {
+        listOf("%", "%GG", "%C3%28", "%FF").forEach { malformedValue ->
+            val store = MemoryPendingStore()
+            val passport = flow(store)
+            val state = startState(passport)
+
+            passport.handleCallback(
+                "kittyecho://auth?code=$malformedValue&state=$state",
+            ).shouldBeInstanceOf<PassportCallback.Rejected>()
+        }
     }
 
     test("callback rejects mismatched state and every non-exact URI or ambiguous query") {

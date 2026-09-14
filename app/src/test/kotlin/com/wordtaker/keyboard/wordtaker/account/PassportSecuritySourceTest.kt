@@ -57,4 +57,16 @@ class PassportSecuritySourceTest : FunSpec({
         graph.contains("authSessionRefresher = oidcTokenManager::refreshAfterUnauthorized") shouldBe true
         backend.contains("MAX_AUTH_ATTEMPTS = 2") shouldBe true
     }
+
+    test("Passport URL codecs use the minSdk 26 charset-name overloads") {
+        val flow = File(
+            projectRoot,
+            "app/src/main/kotlin/com/wordtaker/keyboard/wordtaker/account/PassportOidcFlow.kt",
+        ).readText()
+
+        flow.contains("URLEncoder.encode(value, Charsets.UTF_8.name())") shouldBe true
+        flow.contains("URLDecoder.decode(value, Charsets.UTF_8.name())") shouldBe true
+        flow.contains("URLEncoder.encode(value, Charsets.UTF_8)") shouldBe false
+        flow.contains("URLDecoder.decode(value, Charsets.UTF_8)") shouldBe false
+    }
 })
