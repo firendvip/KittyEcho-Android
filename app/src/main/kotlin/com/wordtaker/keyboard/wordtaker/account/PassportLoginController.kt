@@ -91,7 +91,11 @@ class PassportLoginController(
                 publishStatus(lifecycle, PassportLoginStatus.Exchanging)
                 val result = try {
                     val tokens = withContext(ioDispatcher) {
-                        tokenApi.exchangeAuthorizationCode(callback.code, callback.codeVerifier)
+                        tokenApi.exchangeAuthorizationCode(
+                            callback.code,
+                            callback.codeVerifier,
+                            callback.expectedNonce,
+                        )
                     }
                     if (synchronized(lifecycleLock) { lifecycleGeneration != lifecycle }) {
                         AccountResult.Err("登录状态已变化，请重试")

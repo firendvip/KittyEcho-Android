@@ -16,7 +16,7 @@ data class OidcTokens(
 )
 
 interface PassportOidcTokenApi {
-    fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens
+    fun exchangeAuthorizationCode(code: String, codeVerifier: String, expectedNonce: String): OidcTokens
 
     fun refresh(refreshToken: String): OidcTokens
 
@@ -28,6 +28,7 @@ class PassportOidcTokenClient(
     config: PassportOidcConfig,
     http: OkHttpClient? = null,
     private val nowEpochSeconds: () -> Long = { System.currentTimeMillis() / 1000L },
+    idTokenVerifier: PassportIdTokenVerifier? = null,
 ) : PassportOidcTokenApi {
     private val validConfig = config.validated(requireEnabled = false)
     private val http = (http ?: OkHttpClient()).newBuilder()
@@ -36,10 +37,25 @@ class PassportOidcTokenClient(
         .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .callTimeout(CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .build()
+    private val idTokenVerifier = idTokenVerifier ?: NimbusPassportIdTokenVerifier(
+        config = config,
+        http = this.http,
+        nowEpochSeconds = nowEpochSeconds,
+    )
 
-    override fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens {
+    override fun exchangeAuthorizationCode(
+        code: String,
+        codeVerifier: String,
+        expectedNonce: String,
+    ): OidcTokens {
         val config = requireConfig()
-        if (!OPAQUE.matches(code) || !PKCE_VERIFIER.matches(codeVerifier)) throw malformedResponse()
+        if (
+            !OPAQUE.matches(code) ||
+            !PKCE_VERIFIER.matches(codeVerifier) ||
+            !OPAQUE.matches(expectedNonce)
+        ) {
+            throw malformedResponse()
+        }
         return tokenRequest(
             FormBody.Builder()
                 .add("grant_type", "authorization_code")
@@ -48,6 +64,8 @@ class PassportOidcTokenClient(
                 .add("code", code)
                 .add("code_verifier", codeVerifier)
                 .build(),
+            expectedNonce = expectedNonce,
+            requireIdToken = true,
         )
     }
 
@@ -61,6 +79,7 @@ class PassportOidcTokenClient(
                 .add("refresh_token", refreshToken)
                 .build(),
             previousRefreshToken = refreshToken,
+            requireIdToken = false,
         )
     }
 
@@ -96,7 +115,12 @@ class PassportOidcTokenClient(
         }
     }
 
-    private fun tokenRequest(body: FormBody, previousRefreshToken: String? = null): OidcTokens {
+    private fun tokenRequest(
+        body: FormBody,
+        previousRefreshToken: String? = null,
+        expectedNonce: String? = null,
+        requireIdToken: Boolean,
+    ): OidcTokens {
         val request = Request.Builder()
             .url(requireConfig().tokenEndpoint)
             .post(body)
@@ -122,11 +146,16 @@ class PassportOidcTokenClient(
                     status = it.code,
                 )
             }
-            return parseTokens(json, previousRefreshToken)
+            return parseTokens(json, previousRefreshToken, expectedNonce, requireIdToken)
         }
     }
 
-    private fun parseTokens(json: JSONObject?, previousRefreshToken: String?): OidcTokens {
+    private fun parseTokens(
+        json: JSONObject?,
+        previousRefreshToken: String?,
+        expectedNonce: String?,
+        requireIdToken: Boolean,
+    ): OidcTokens {
         val accessToken = json?.optString("access_token").orEmpty()
         val tokenType = json?.optString("token_type").orEmpty()
         val expiresIn = json?.optLong("expires_in", -1L) ?: -1L
@@ -134,16 +163,19 @@ class PassportOidcTokenClient(
         val refreshToken = json?.optString("refresh_token")
             ?.takeIf(String::isNotBlank)
             ?: previousRefreshToken
+        val idToken = json?.optString("id_token")?.takeIf(String::isNotBlank)
         if (
             !TOKEN.matches(accessToken) ||
             tokenType != "Bearer" ||
             expiresIn !in MIN_EXPIRES_SECONDS..MAX_EXPIRES_SECONDS ||
             scope.toSet().size != scope.size ||
             !scope.containsAll(PassportOidcConfig.SCOPES.split(' ')) ||
-            (refreshToken != null && !TOKEN.matches(refreshToken))
+            (refreshToken != null && !TOKEN.matches(refreshToken)) ||
+            (requireIdToken && idToken == null)
         ) {
             throw malformedResponse()
         }
+        if (idToken != null) idTokenVerifier.verify(idToken, expectedNonce)
         return OidcTokens(
             accessToken = accessToken,
             refreshToken = refreshToken,

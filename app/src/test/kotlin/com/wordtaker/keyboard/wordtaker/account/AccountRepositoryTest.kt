@@ -102,6 +102,24 @@ class AccountRepositoryTest : FunSpec({
         }
     }
 
+    test("central profile identity requires a nonblank userId and never trusts nickname or email alone") {
+        runTest {
+            val api = FakeAccountApi().apply {
+                authMeResponses += {
+                    JSONObject("""{"account":{"nickname":"同名用户","email":"shared@example.com"}}""")
+                }
+            }
+            val store = FakeAuthSessionStore()
+            val repository = repository(api, store)
+
+            repository.loginWithOidc(OidcTokens("oidc-access", "oidc-refresh", 2_000L))
+                .shouldBeInstanceOf<AccountResult.Ok<Unit>>()
+
+            store.isLoggedIn() shouldBe true
+            repository.state.value.profile.shouldBeInstanceOf<AccountProfileState.Unavailable>()
+        }
+    }
+
     test("profile hydration failure is understandable and retryable without signing out") {
         runTest {
             val api = FakeAccountApi().apply {

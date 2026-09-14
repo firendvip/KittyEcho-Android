@@ -230,6 +230,7 @@ class PassportLoginControllerTest : FunSpec({
             val start = fixture.controller.begin().shouldBeInstanceOf<PassportStartResult.Ready>()
             val state = fixture.pending.value!!.state
             val verifier = fixture.pending.value!!.codeVerifier
+            val nonce = fixture.pending.value!!.nonce
 
             fixture.controller.handleCallback(
                 "kittyecho://auth?code=authorization-code-123456&state=$state",
@@ -237,6 +238,7 @@ class PassportLoginControllerTest : FunSpec({
 
             fixture.tokens.exchangedCode shouldBe "authorization-code-123456"
             fixture.tokens.exchangedVerifier shouldBe verifier
+            fixture.tokens.exchangedNonce shouldBe nonce
             fixture.store.oidc shouldBe fixture.tokens.next
             fixture.repository.state.value.account?.userId shouldBe "passport-user"
             fixture.controller.status.value shouldBe PassportLoginStatus.Idle
@@ -345,17 +347,19 @@ private class ControllerTokenApi : PassportOidcTokenApi {
     var failure: Throwable? = null
     var exchangedCode: String? = null
     var exchangedVerifier: String? = null
+    var exchangedNonce: String? = null
     var exchangeCalls: Int = 0
     var revokeFailure: Throwable? = null
     var onRevoke: (() -> Unit)? = null
     val revokeCalls = mutableListOf<String>()
     val accountApi = ControllerAccountApi()
 
-    override fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens {
+    override fun exchangeAuthorizationCode(code: String, codeVerifier: String, expectedNonce: String): OidcTokens {
         exchangeCalls += 1
         failure?.let { throw it }
         exchangedCode = code
         exchangedVerifier = codeVerifier
+        exchangedNonce = expectedNonce
         return next
     }
 
@@ -372,7 +376,7 @@ private class BlockingControllerTokenApi : PassportOidcTokenApi {
     val exchangeEntered = CountDownLatch(1)
     val allowExchangeToFinish = CountDownLatch(1)
 
-    override fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens {
+    override fun exchangeAuthorizationCode(code: String, codeVerifier: String, expectedNonce: String): OidcTokens {
         exchangeEntered.countDown()
         check(allowExchangeToFinish.await(5, TimeUnit.SECONDS))
         return OidcTokens("session-a", "family-a", 2_000L)

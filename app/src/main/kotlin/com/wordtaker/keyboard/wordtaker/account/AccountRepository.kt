@@ -302,7 +302,7 @@ class AccountRepository(
 
     private fun JSONObject.requiredAccount(): AccountInfo {
         val accountJson = optJSONObject("account") ?: throw InvalidProfileException()
-        return AccountInfoJson.from(accountJson).takeIf(AccountInfo::hasIdentity)
+        return AccountInfoJson.from(accountJson).takeIf { !it.userId.isNullOrBlank() }
             ?: throw InvalidProfileException()
     }
 
@@ -334,8 +334,5 @@ class AccountRepository(
         const val MESSAGE_SIGNED_OUT = "登录已失效，请重新登录"
     }
 }
-
-private fun AccountInfo.hasIdentity(): Boolean =
-    listOf(userId, nickname, inviteCode, email, phone).any { !it.isNullOrBlank() }
 
 private class InvalidProfileException : Exception()

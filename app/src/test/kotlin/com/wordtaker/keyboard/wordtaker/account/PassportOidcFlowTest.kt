@@ -96,18 +96,20 @@ class PassportOidcFlowTest : FunSpec({
         flow(store).hasRecoverableLogin shouldBe true
     }
 
-    test("matching callback is single-use and returns only code plus the stored verifier") {
+    test("matching callback is single-use and binds code exchange to the stored verifier and nonce") {
         val store = MemoryPendingStore()
         val passport = flow(store)
         val start = passport.begin().shouldBeInstanceOf<PassportStartResult.Ready>()
         val state = query(URI(start.authorizationUrl).rawQuery).getValue("state").single()
         val verifier = store.pending!!.codeVerifier
+        val nonce = store.pending!!.nonce
         val code = "authorization-code-123456"
 
         val accepted = passport.handleCallback("kittyecho://auth?code=$code&state=$state")
             .shouldBeInstanceOf<PassportCallback.AuthorizationCode>()
         accepted.code shouldBe code
         accepted.codeVerifier shouldBe verifier
+        accepted.expectedNonce shouldBe nonce
         accepted.redirectUri shouldBe "kittyecho://auth"
         store.pending shouldBe null
 

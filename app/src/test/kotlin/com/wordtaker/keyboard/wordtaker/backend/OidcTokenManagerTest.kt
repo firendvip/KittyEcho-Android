@@ -191,7 +191,7 @@ private class FakeOidcTokenApi : PassportOidcTokenApi {
     var failure: BackendException? = null
     val refreshCalls = mutableListOf<String>()
 
-    override fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens = next
+    override fun exchangeAuthorizationCode(code: String, codeVerifier: String, expectedNonce: String): OidcTokens = next
 
     override fun refresh(refreshToken: String): OidcTokens {
         refreshCalls += refreshToken
@@ -208,7 +208,7 @@ private class BlockingOidcTokenApi(
     val refreshEntered = CountDownLatch(1)
     val allowRefreshToFinish = CountDownLatch(1)
 
-    override fun exchangeAuthorizationCode(code: String, codeVerifier: String): OidcTokens = next
+    override fun exchangeAuthorizationCode(code: String, codeVerifier: String, expectedNonce: String): OidcTokens = next
 
     override fun refresh(refreshToken: String): OidcTokens {
         refreshEntered.countDown()

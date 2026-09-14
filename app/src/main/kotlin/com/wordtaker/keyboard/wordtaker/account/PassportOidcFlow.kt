@@ -55,6 +55,7 @@ internal data class ValidPassportOidcConfig(
     val authorizationEndpoint: String = "$issuer/oauth2/authorize"
     val tokenEndpoint: String = "$issuer/oauth2/token"
     val revocationEndpoint: String = "$issuer/oauth2/revoke"
+    val jwksEndpoint: String = "$issuer/.well-known/jwks.json"
 }
 
 data class PendingPassportAuthorization(
@@ -82,6 +83,7 @@ sealed interface PassportCallback {
     data class AuthorizationCode(
         val code: String,
         val codeVerifier: String,
+        val expectedNonce: String,
         val redirectUri: String,
     ) : PassportCallback
 
@@ -193,7 +195,7 @@ class PassportOidcFlow(
             return PassportCallback.Rejected(MESSAGE_INVALID_CALLBACK)
         }
         pendingStore.clear()
-        return PassportCallback.AuthorizationCode(code, pending.codeVerifier, valid.redirectUri)
+        return PassportCallback.AuthorizationCode(code, pending.codeVerifier, pending.nonce, valid.redirectUri)
     }
 
     fun cancel() {
