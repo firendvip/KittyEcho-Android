@@ -22,12 +22,9 @@ import com.wordtaker.keyboard.wordtaker.polish.OnlineOnlyPolisher
 import com.wordtaker.keyboard.wordtaker.polish.Polisher
 import com.wordtaker.keyboard.wordtaker.polish.RealPolisher
 import com.wordtaker.keyboard.wordtaker.settings.SettingsRepository
+import com.wordtaker.keyboard.wordtaker.speech.ParaformerModelManager
 import com.wordtaker.keyboard.wordtaker.speech.RealSpeechEngine
 import com.wordtaker.keyboard.wordtaker.speech.SpeechEngine
-import com.wordtaker.keyboard.wordtaker.speech.ParaformerAndroidModelStateStore
-import com.wordtaker.keyboard.wordtaker.speech.ParaformerAndroidPartialStore
-import com.wordtaker.keyboard.wordtaker.speech.ParaformerModelManager
-import com.wordtaker.keyboard.wordtaker.speech.ParaformerWorkManagerScheduler
 
 /**
  * Minimal manual dependency container (no Hilt). Holds process-wide singletons
@@ -61,17 +58,15 @@ object AppGraph {
 
     val toneController: ToneController by lazy { ToneController(requireContext()) }
 
-    // ASR has no production fallback: model absence/corruption is a typed user-visible failure.
-    val speechEngine: SpeechEngine by lazy {
-        RealSpeechEngine(requireContext())
-    }
+    // ASR has no network fallback: missing/corrupt private bytes are repaired from APK assets.
+    private val realSpeechEngine: RealSpeechEngine by lazy { RealSpeechEngine(requireContext()) }
+
+    val speechEngine: SpeechEngine by lazy { realSpeechEngine }
 
     internal val paraformerModelManager: ParaformerModelManager by lazy {
         ParaformerModelManager(
-            modelReady = { speechEngine.isReady() },
-            stateStore = ParaformerAndroidModelStateStore(requireContext()),
-            workScheduler = ParaformerWorkManagerScheduler(requireContext()),
-            partialStore = ParaformerAndroidPartialStore(requireContext()),
+            state = realSpeechEngine.modelState,
+            retryPreparation = realSpeechEngine::retryModelPreparation,
         )
     }
 

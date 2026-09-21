@@ -1117,7 +1117,7 @@ class VoiceViewModelOnlinePolishTest : FunSpec({
         }
     }
 
-    test("permission and model failures emit their events and clear processing") {
+    test("permission emits an event while model preparation stays local and clears processing") {
         runTest {
             val dispatcher = StandardTestDispatcher(testScheduler)
             Dispatchers.setMain(dispatcher)
@@ -1141,7 +1141,7 @@ class VoiceViewModelOnlinePolishTest : FunSpec({
                 }
                 modelVm.event.test {
                     recordOneSegment(modelVm)
-                    awaitItem() shouldBe VoiceEvent.ModelRequired
+                    expectNoEvents()
                     cancelAndIgnoreRemainingEvents()
                 }
 

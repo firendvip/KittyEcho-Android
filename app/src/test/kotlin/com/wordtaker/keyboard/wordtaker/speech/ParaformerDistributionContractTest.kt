@@ -8,10 +8,6 @@ import java.io.File
 
 private const val ARTIFACT_REVISION = "fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94"
 private const val CONVERSION_REVISION = "bbf29cf22ede51f541c052af8f8e77fc54c76e21"
-private const val OFFICIAL_BASE =
-    "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28/resolve/$ARTIFACT_REVISION"
-private const val MIRROR_BASE =
-    "https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28/resolve/$ARTIFACT_REVISION"
 
 class ParaformerDistributionContractTest : FunSpec({
 
@@ -19,12 +15,9 @@ class ParaformerDistributionContractTest : FunSpec({
         ParaformerModelContract.MODEL_REVISION shouldBe ARTIFACT_REVISION
     }
 
-    test("production contract freezes official first mirror second and all attribution metadata") {
+    test("production contract freezes exact bundled bytes and all attribution metadata") {
         val source = productionSource("wordtaker/speech/ParaformerModelContract.kt")
 
-        source shouldContain OFFICIAL_BASE
-        source shouldContain MIRROR_BASE
-        (source.indexOf(OFFICIAL_BASE) < source.indexOf(MIRROR_BASE)) shouldBe true
         source shouldContain "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
         source shouldContain "v2.0.4"
         source shouldContain CONVERSION_REVISION

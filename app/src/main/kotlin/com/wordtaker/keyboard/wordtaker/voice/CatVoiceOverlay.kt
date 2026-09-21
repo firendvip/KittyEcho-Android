@@ -36,7 +36,6 @@ import com.wordtaker.keyboard.wordtaker.cat.CatSkin
 import com.wordtaker.keyboard.wordtaker.cat.CatState
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
 import com.wordtaker.keyboard.wordtaker.speech.MicPermissionActivity
-import com.wordtaker.keyboard.wordtaker.ui.WordTakerSettingsActivity
 
 /**
  * The cat voice-input OVERLAY. Rendered on top of the keyboard (not as a separate
@@ -101,14 +100,12 @@ fun CatVoiceOverlay(modifier: Modifier = Modifier) {
         }
     }
 
-    // One-shot events: missing mic permission / model not ready.
+    // One-shot microphone permission event.
     LaunchedEffect(vm) {
         vm.event.collect { event ->
             when (event) {
                 VoiceEvent.PermissionRequired ->
                     launchWordTaker(context, MicPermissionActivity::class.java)
-                VoiceEvent.ModelRequired ->
-                    launchWordTaker(context, WordTakerSettingsActivity::class.java)
             }
             VoiceOverlayController.hide()
         }

@@ -1,5 +1,6 @@
 package com.wordtaker.keyboard.wordtaker.speech
 
+import android.content.res.AssetManager
 import android.system.Os
 import android.system.OsConstants
 import androidx.test.core.app.ApplicationProvider
@@ -7,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,6 +24,20 @@ import org.junit.runner.RunWith
 class ParaformerProductionAcceptanceTest {
     private val context = ApplicationProvider.getApplicationContext<android.content.Context>()
     private val modelRoot = File(context.noBackupFilesDir, ParaformerModelContract.PRIVATE_DIRECTORY)
+
+    @Test
+    fun bundledApkAssetsMatchFrozenContract() {
+        assertBundledAsset(
+            ParaformerModelContract.MODEL_FILENAME,
+            ParaformerModelContract.MODEL_BYTES,
+            ParaformerModelContract.MODEL_SHA256,
+        )
+        assertBundledAsset(
+            ParaformerModelContract.TOKENS_FILENAME,
+            ParaformerModelContract.TOKENS_BYTES,
+            ParaformerModelContract.TOKENS_SHA256,
+        )
+    }
 
     @Test
     fun missingModelIsTyped() {
@@ -99,6 +115,28 @@ class ParaformerProductionAcceptanceTest {
             ParaformerPrivateModelStore(context).validateAndResolve()
         }.exceptionOrNull()
         assertTrue(error is AsrModelCorruptException)
+    }
+
+    private fun assertBundledAsset(filename: String, expectedBytes: Long, expectedSha256: String) {
+        val digest = MessageDigest.getInstance("SHA-256")
+        var measuredBytes = 0L
+        context.assets.open(
+            "models/paraformer/$filename",
+            AssetManager.ACCESS_STREAMING,
+        ).use { input ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                measuredBytes += count
+                digest.update(buffer, 0, count)
+            }
+        }
+        assertEquals(expectedBytes, measuredBytes)
+        assertEquals(
+            expectedSha256,
+            digest.digest().joinToString("") { "%02x".format(it) },
+        )
     }
 
     private fun withModelRootMovedAside(

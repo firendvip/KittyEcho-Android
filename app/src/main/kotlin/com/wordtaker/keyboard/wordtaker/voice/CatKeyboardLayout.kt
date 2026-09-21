@@ -123,15 +123,12 @@ fun CatKeyboardLayout(modifier: Modifier = Modifier) {
         }
     }
 
-    // One-shot events: missing mic permission -> launch the transparent permission relay;
-    // model not ready -> show the shared in-IME download confirmation; no PCM is captured.
+    // One-shot permission relay. Model preparation is automatic and never captures PCM early.
     LaunchedEffect(vm) {
         vm.event.collect { event ->
             when (event) {
                 VoiceEvent.PermissionRequired ->
                     launchWordTaker(context, MicPermissionActivity::class.java)
-                VoiceEvent.ModelRequired ->
-                    AppGraph.paraformerModelManager.onVoiceRequested()
             }
         }
     }

@@ -7,10 +7,12 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -19,21 +21,28 @@ import kotlinx.coroutines.withContext
  * can start while the process-wide single recognizer actor handles queued work in strict FIFO.
  */
 class RealSpeechEngine(private val context: Context) : SpeechEngine {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val recorder = PcmRecorder()
     private val decoder = SherpaParaformerDecoder(ParaformerPrivateModelStore(context))
     private val actor = ParaformerRecognitionActor(
         decoder = decoder,
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        scope = scope,
     )
     private val legacyModelCleaner = ParaformerLegacyModelCleaner(context)
+    private val bundledInstaller = ParaformerBundledAssetInstaller(context)
+    private val preparationLock = Any()
+
+    private val _modelState = MutableStateFlow(ParaformerLifecycleState())
+    internal val modelState: StateFlow<ParaformerLifecycleState> = _modelState.asStateFlow()
+    @Volatile
+    private var preparationFailure: AsrFailureException? = null
+    private var preparationJob: Job? = null
 
     private val _partials = MutableStateFlow("")
     override val partials: StateFlow<String> = _partials.asStateFlow()
 
     init {
-        // Hash and initialize off-main. Runtime download/install is owned by the shared model
-        // manager; a missing or corrupt private artifact leaves capture fail-closed.
-        actor.prepareAsync()
+        ensureModelPreparationStarted()
     }
 
     private fun hasMicPermission(): Boolean =
@@ -44,19 +53,73 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
     // here represents only whether the fail-closed local model can accept a recording.
     override fun isReady(): Boolean = actor.isReady()
 
-    override fun readinessFailure(): AsrFailureException? = actor.readinessFailure()
-
-    override suspend fun prepareInstalledModel(): AsrFailureException? = withContext(Dispatchers.IO) {
-        try {
-            actor.prepareAndAwait()
-            actor.readinessFailure()
-        } catch (error: AsrFailureException) {
-            error
-        } catch (error: OutOfMemoryError) {
-            AsrOutOfMemoryException(error)
-        } catch (error: Throwable) {
-            AsrInitializationException(error)
+    override fun readinessFailure(): AsrFailureException? =
+        preparationFailure ?: actor.readinessFailure().takeIf {
+            _modelState.value.phase == ParaformerModelPhase.Error
         }
+
+    override suspend fun prepareInstalledModel(): AsrFailureException? {
+        ensureModelPreparationStarted()?.join()
+        return readinessFailure()
+    }
+
+    internal fun retryModelPreparation() {
+        if (!actor.isReady()) ensureModelPreparationStarted()
+    }
+
+    private fun ensureModelPreparationStarted(): Job? = synchronized(preparationLock) {
+        if (actor.isReady()) {
+            _modelState.value = ParaformerLifecycleState(ParaformerModelPhase.Ready)
+            return@synchronized null
+        }
+        preparationJob?.takeIf { it.isActive }?.let { return@synchronized it }
+        preparationFailure = null
+        _modelState.value = ParaformerLifecycleState(ParaformerModelPhase.Installing)
+        scope.launch {
+            try {
+                bundledInstaller.ensureInstalled()
+                _modelState.value = ParaformerLifecycleState(ParaformerModelPhase.Initializing)
+                actor.prepareAndAwait()
+                preparationFailure = null
+                _modelState.value = ParaformerLifecycleState(ParaformerModelPhase.Ready)
+            } catch (error: ParaformerAttemptException) {
+                preparationFailure = when (error.failure) {
+                    ParaformerAttemptFailure.Integrity -> AsrModelCorruptException(error)
+                    ParaformerAttemptFailure.Storage -> AsrInitializationException(error)
+                }
+                _modelState.value = ParaformerLifecycleState(
+                    phase = ParaformerModelPhase.Error,
+                    failure = when (error.failure) {
+                        ParaformerAttemptFailure.Integrity -> ParaformerModelFailure.Integrity
+                        ParaformerAttemptFailure.Storage -> ParaformerModelFailure.Storage
+                    },
+                )
+            } catch (error: AsrOutOfMemoryException) {
+                preparationFailure = error
+                _modelState.value = ParaformerLifecycleState(
+                    ParaformerModelPhase.Error,
+                    ParaformerModelFailure.Memory,
+                )
+            } catch (error: OutOfMemoryError) {
+                preparationFailure = AsrOutOfMemoryException(error)
+                _modelState.value = ParaformerLifecycleState(
+                    ParaformerModelPhase.Error,
+                    ParaformerModelFailure.Memory,
+                )
+            } catch (error: AsrFailureException) {
+                preparationFailure = error
+                _modelState.value = ParaformerLifecycleState(
+                    ParaformerModelPhase.Error,
+                    ParaformerModelFailure.Initialization,
+                )
+            } catch (error: Throwable) {
+                preparationFailure = AsrInitializationException(error)
+                _modelState.value = ParaformerLifecycleState(
+                    ParaformerModelPhase.Error,
+                    ParaformerModelFailure.Initialization,
+                )
+            }
+        }.also { preparationJob = it }
     }
 
     @SuppressLint("MissingPermission")
@@ -65,9 +128,8 @@ class RealSpeechEngine(private val context: Context) : SpeechEngine {
             return CaptureStartResult.Failed(CaptureStartFailure.PermissionDenied)
         }
         if (!actor.isReady()) {
-            actor.prepareAsync()
             return CaptureStartResult.Failed(
-                CaptureStartFailure.ModelNotReady(actor.readinessFailure()),
+                CaptureStartFailure.ModelNotReady(readinessFailure()),
             )
         }
         _partials.value = ""

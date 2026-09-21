@@ -23,11 +23,7 @@ internal class ParaformerAndroidInstallOps(private val context: Context) : Paraf
     private val stagingRoot = ParaformerStoragePaths.stagingRoot(context)
     private val finalRoot = ParaformerStoragePaths.finalRoot(context)
 
-    override fun checkCancelled() {
-        if (ParaformerDownloadStopSignal.isRequested()) {
-            throw ParaformerAttemptException(ParaformerAttemptFailure.Cancelled)
-        }
-    }
+    override fun checkCancelled() = Unit
 
     fun ensureStagingDirectory(): File {
         requireDirectChildren()
@@ -144,18 +140,6 @@ internal class ParaformerAndroidInstallOps(private val context: Context) : Paraf
     private companion object {
         const val FILE_MODE_0600 = 0x180
         const val DIRECTORY_MODE_0700 = 0x1C0
-    }
-}
-
-internal class ParaformerAndroidPartialStore(private val context: Context) : ParaformerPartialStore {
-    override fun deleteAll() {
-        val noBackupRoot = context.noBackupFilesDir.absoluteFile
-        val staging = ParaformerStoragePaths.stagingRoot(context)
-        if (staging.parentFile?.absoluteFile != noBackupRoot) {
-            throw ParaformerAttemptException(ParaformerAttemptFailure.Integrity)
-        }
-        deleteFixedEntryNoFollow(staging)
-        fsyncDirectory(noBackupRoot)
     }
 }
 

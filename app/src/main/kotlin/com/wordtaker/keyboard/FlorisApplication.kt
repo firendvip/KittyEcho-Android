@@ -93,8 +93,8 @@ class FlorisApplication : Application() {
         super.onCreate()
         FlorisApplicationReference = WeakReference(this)
         com.wordtaker.keyboard.wordtaker.di.AppGraph.init(applicationContext)
-        // Prime the on-device ASR engine EARLY on a background thread. The APK contains no
-        // model; this only validates/warms a previously installed private Paraformer model.
+        // Prime the on-device ASR engine early. Construction starts background installation of
+        // the frozen APK assets and then initializes the recognizer without blocking startup.
         scope.launch {
             try {
                 com.wordtaker.keyboard.wordtaker.di.AppGraph.speechEngine
@@ -129,6 +129,9 @@ class FlorisApplication : Application() {
     }
 
     fun init() {
+        // Direct-boot startup may occur before credential-protected no-backup storage is ready.
+        // Re-assert preparation after unlock; the engine coalesces concurrent attempts.
+        com.wordtaker.keyboard.wordtaker.di.AppGraph.paraformerModelManager.retry()
         // D-1 ANR residual root cause (night4 r4/r5, ANR trace anr_2026-07-13-14-39-42-975):
         // even after r3 serialized clipboardManager/DictionaryManager behind the prefs-load
         // coroutine below, `AppPrefsKt.<clinit>` (triggered by first touch of the top-level

@@ -41,11 +41,6 @@ object ParaformerModelContract {
         "59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6"
     const val TOTAL_BYTES = MODEL_BYTES + TOKENS_BYTES
 
-    const val OFFICIAL_BASE_URL =
-        "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28/resolve/fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94"
-    const val MIRROR_BASE_URL =
-        "https://hf-mirror.com/csukuangfj/sherpa-onnx-paraformer-zh-2023-03-28/resolve/fe3e2bbfa0a0d3789b653c4b6cf3f87a5dbf2b94"
-
     fun validate(artifacts: List<ParaformerArtifactFacts>) {
         val byName = artifacts.associateBy { it.filename }
         if (

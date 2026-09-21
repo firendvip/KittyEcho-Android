@@ -47,8 +47,8 @@ import kotlinx.coroutines.withTimeout
 // 不阻止用户继续键入或开始下一段录音。
 enum class VoicePhase { Idle, Recording, Recognizing, Polishing, Success }
 
-/** One-shot events the UI must act on (launch permission / model-download flows). */
-enum class VoiceEvent { PermissionRequired, ModelRequired }
+/** One-shot events the UI must act on. */
+enum class VoiceEvent { PermissionRequired }
 
 enum class VoiceSegmentDiscardReason { PrivacyUnavailable, EditorSessionChanged }
 
@@ -474,7 +474,6 @@ class VoiceViewModel(
             is AsrInitializationException,
             is AsrOutOfMemoryException,
             -> {
-                _event.tryEmit(VoiceEvent.ModelRequired)
                 _toast.value = when (error) {
                     is AsrModelMissingException -> "缺少本地语音模型"
                     is AsrModelCorruptException -> "本地语音模型校验失败"
@@ -545,24 +544,20 @@ class VoiceViewModel(
     }
 
     private fun startRecording() {
-        // Pre-flight before permission or AudioRecord work so an unavailable runtime model
-        // produces the download/repair UI without opening or buffering microphone PCM.
+        // Pre-flight before permission or AudioRecord work: automatic preparation never opens
+        // or buffers microphone PCM before the local model is ready.
         if (!speechEngine.isReady()) {
             when (val failure = speechEngine.readinessFailure()) {
                 is AsrModelMissingException -> {
-                    _event.tryEmit(VoiceEvent.ModelRequired)
-                    _toast.value = "缺少本地语音模型"
+                    _toast.value = "语音模型正在准备，请稍候"
                 }
                 is AsrModelCorruptException -> {
-                    _event.tryEmit(VoiceEvent.ModelRequired)
-                    _toast.value = "本地语音模型校验失败"
+                    _toast.value = "语音模型正在准备，请稍候"
                 }
                 is AsrInitializationException -> {
-                    _event.tryEmit(VoiceEvent.ModelRequired)
                     _toast.value = "本地语音模型初始化失败"
                 }
                 is AsrOutOfMemoryException -> {
-                    _event.tryEmit(VoiceEvent.ModelRequired)
                     _toast.value = "设备内存不足，语音模型无法运行"
                 }
                 else -> _toast.value = "语音正在准备，请稍候"
@@ -626,10 +621,9 @@ class VoiceViewModel(
                 _toast.value = "需要麦克风权限"
             }
             is CaptureStartFailure.ModelNotReady -> {
-                _event.tryEmit(VoiceEvent.ModelRequired)
                 _toast.value = when (failure.failure) {
-                    is AsrModelMissingException -> "缺少本地语音模型"
-                    is AsrModelCorruptException -> "本地语音模型校验失败"
+                    is AsrModelMissingException -> "语音模型正在准备，请稍候"
+                    is AsrModelCorruptException -> "语音模型正在准备，请稍候"
                     is AsrOutOfMemoryException -> "设备内存不足，语音模型无法运行"
                     is AsrInitializationException -> "本地语音模型初始化失败"
                     else -> "语音模型正在准备，请稍候"
@@ -672,7 +666,6 @@ class VoiceViewModel(
             } catch (e: ModelNotReadyException) {
                 captureClosed = runCatching { speechEngine.cancel() }.isSuccess
                 Log.i(TAG, "ASR: ModelNotReady")
-                _event.tryEmit(VoiceEvent.ModelRequired)
                 _toast.value = "语音模型正在准备，请稍候"
                 discardProcessing(segmentId)
                 return@launch

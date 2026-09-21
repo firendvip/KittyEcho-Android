@@ -15,6 +15,7 @@
  */
 
 import com.android.build.api.dsl.ApplicationExtension
+import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
@@ -51,6 +52,55 @@ val projectVersionNameSuffix = projectVersionName.substringAfter("-", "").let { 
         "-$suffix"
     } else {
         suffix
+    }
+}
+
+val bundledParaformerModel = providers.gradleProperty("kittyechoParaformerModel")
+val bundledParaformerTokens = providers.gradleProperty("kittyechoParaformerTokens")
+val bundledParaformerModelReceipt = providers.gradleProperty("kittyechoParaformerModelReceipt")
+val bundledParaformerTokensReceipt = providers.gradleProperty("kittyechoParaformerTokensReceipt")
+val bundledParaformerAssetsDir = layout.buildDirectory.dir("generated/assets/paraformer")
+val generateBundledParaformerAssets = tasks.register<Exec>("generateBundledParaformerAssets") {
+    group = "build"
+    description = "Verifies frozen repository-external Paraformer inputs and generates APK assets"
+    environment("PYTHONDONTWRITEBYTECODE", "1")
+    environment(
+        "PYTHONPATH",
+        rootProject.file("tools/asr-benchmark/src").absolutePath,
+    )
+    listOf(
+        "kittyechoParaformerModel" to bundledParaformerModel,
+        "kittyechoParaformerTokens" to bundledParaformerTokens,
+        "kittyechoParaformerModelReceipt" to bundledParaformerModelReceipt,
+        "kittyechoParaformerTokensReceipt" to bundledParaformerTokensReceipt,
+    ).forEach { (name, value) ->
+        inputs.property(name, value.orElse("<missing>"))
+    }
+    outputs.dir(bundledParaformerAssetsDir)
+    // Revalidate the frozen external inode, receipt and digest for every build invocation.
+    outputs.upToDateWhen { false }
+    doFirst {
+        fun required(name: String, value: Provider<String>): String =
+            value.orNull ?: throw GradleException("$name is required")
+        commandLine(
+            "python3",
+            "-B",
+            rootProject.file(
+                "tools/asr-benchmark/scripts/prepare_paraformer_app_assets.py",
+            ).absolutePath,
+            "--repo-root",
+            rootProject.projectDir.absolutePath,
+            "--model",
+            required("kittyechoParaformerModel", bundledParaformerModel),
+            "--tokens",
+            required("kittyechoParaformerTokens", bundledParaformerTokens),
+            "--model-receipt",
+            required("kittyechoParaformerModelReceipt", bundledParaformerModelReceipt),
+            "--tokens-receipt",
+            required("kittyechoParaformerTokensReceipt", bundledParaformerTokensReceipt),
+            "--output-dir",
+            bundledParaformerAssetsDir.get().asFile.absolutePath,
+        )
     }
 }
 
@@ -106,7 +156,7 @@ configure<ApplicationExtension> {
 
         sourceSets {
             maybeCreate("main").apply {
-                assets.srcDirs("src/main/assets")
+                assets.srcDirs("src/main/assets", bundledParaformerAssetsDir.get().asFile)
             }
         }
     }
@@ -125,8 +175,8 @@ configure<ApplicationExtension> {
         compose = true
     }
 
-    // The SenseVoice .onnx model is downloaded at runtime, never bundled, but keep
-    // .onnx uncompressed in case a model is ever shipped as an asset.
+    // The bundled Paraformer model and tokens stay Stored so first-run installation can
+    // stream exact bytes from the APK without an extra package-level inflate allocation.
     // dict_pinyin.dat must be stored uncompressed so the native decoder can mmap it via fd.
     // han.sqlite3 (郑码/嘸蝦米/倉頡/五笔/笔画 shape-code tables) stays uncompressed (Stored)
     // so the SQLite reader can open it directly from the APK without inflating.
@@ -134,7 +184,7 @@ configure<ApplicationExtension> {
         // mmah.json (handwriting template DB) ships as mmah.hwr and stays uncompressed so it can
         // be read straight from the APK without inflating a ~800KB blob on every keyboard open.
         // (Using a dedicated extension avoids storing every layout .json uncompressed.)
-        noCompress += listOf("onnx", "dat", "sqlite3", "hwr")
+        noCompress += listOf("onnx", "txt", "dat", "sqlite3", "hwr")
     }
 
     // sherpa-onnx AAR bundles several native libs; pick the first match so a single
@@ -213,6 +263,10 @@ configure<ApplicationExtension> {
     }
 }
 
+tasks.named("preBuild").configure {
+    dependsOn(generateBundledParaformerAssets)
+}
+
 
 // After packaging, copy the APK to KittyEcho-<versionName>-<buildType>.apk in the same output dir.
 afterEvaluate {
@@ -278,7 +332,6 @@ dependencies {
     implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.profileinstaller)
-    implementation(libs.androidx.work.runtime)
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
