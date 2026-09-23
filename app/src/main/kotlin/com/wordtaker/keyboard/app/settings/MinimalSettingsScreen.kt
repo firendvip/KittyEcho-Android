@@ -104,7 +104,6 @@ fun MinimalSettingsScreen() {
         BackHandler { showAccountPage = false }
         AccountScreen(
             repository = AppGraph.accountRepository,
-            passportLogin = AppGraph.passportLogin,
             onBack = { showAccountPage = false },
         )
     } else {

@@ -6,7 +6,6 @@ import com.wordtaker.keyboard.wordtaker.backend.AccountInfoJson
 import com.wordtaker.keyboard.wordtaker.backend.AuthSessionStore
 import com.wordtaker.keyboard.wordtaker.backend.BackendException
 import com.wordtaker.keyboard.wordtaker.backend.LoginResult
-import com.wordtaker.keyboard.wordtaker.backend.OidcTokens
 import com.wordtaker.keyboard.wordtaker.backend.PlanInfo
 import com.wordtaker.keyboard.wordtaker.backend.QuotaInfo
 import com.wordtaker.keyboard.wordtaker.backend.WechatAuthUrl
@@ -108,47 +107,8 @@ class AccountRepository(
     suspend fun loginWithWechatCode(code: String): AccountResult<Unit> =
         login { client.authWechatLogin(code) }
 
-    /** Completes central Passport login without exposing an OIDC token to the UI. */
-    suspend fun loginWithOidc(tokens: OidcTokens): AccountResult<Unit> =
-        login(
-            block = {
-                LoginResult(
-                    accessToken = tokens.accessToken,
-                    account = null,
-                    isNew = false,
-                    cloudRemaining = null,
-                    deviceGift = null,
-                )
-            },
-            persist = { result -> tokenStore.setOidc(tokens, result.account) },
-        )
-
-    internal suspend fun loginWithOidc(
-        tokens: OidcTokens,
-        expectedGeneration: Long,
-    ): AccountResult<Unit> =
-        login(
-            expectedGeneration = expectedGeneration,
-            block = {
-                LoginResult(
-                    accessToken = tokens.accessToken,
-                    account = null,
-                    isNew = false,
-                    cloudRemaining = null,
-                    deviceGift = null,
-                )
-            },
-            persist = { result -> tokenStore.setOidc(tokens, result.account) },
-        )
-
     internal fun authenticationGeneration(): Long = synchronized(sessionLock) {
         sessionGeneration
-    }
-
-    internal fun invalidatePendingAuthentication() {
-        synchronized(sessionLock) {
-            sessionGeneration += 1
-        }
     }
 
     /** 登录态内刷新账号摘要；失败进入可理解、可重试的资料不可用状态。 */
@@ -186,13 +146,6 @@ class AccountRepository(
     fun logout() {
         invalidateAuthentication()
     }
-
-    internal fun logoutForPassport(): String? =
-        synchronized(sessionLock) {
-            val refreshToken = tokenStore.oidcTokens()?.refreshToken
-            invalidateAuthenticationLocked()
-            refreshToken
-        }
 
     /** Confirmed authentication expiry must update storage and StateFlow together. */
     fun invalidateAuthentication() {

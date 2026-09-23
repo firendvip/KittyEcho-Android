@@ -6,6 +6,13 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/) and
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-09-23
+
+### Changed
+- **暂停望三通行证统一登录**：账号页恢复项目原有的邮箱验证码登录，微信入口继续保持隐藏；不再启动 Passport/OIDC/PKCE/JWKS 流程，也不再连接 `auth.yaa3.com`。
+- **登录数据非破坏回退**：继续读取原有加密业务令牌；已存在的 Passport 会话数据仅被忽略，不迁移、不清除。
+- **语音与模型能力保持不变**：继续从 APK 内置的冻结 Paraformer 资产安全安装，本次回退不改变语音、模型、性能或其他功能。
+
 ## [0.43.0] - 2026-09-14
 
 ### Added

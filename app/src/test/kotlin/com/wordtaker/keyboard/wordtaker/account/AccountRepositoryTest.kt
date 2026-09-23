@@ -6,7 +6,6 @@ import com.wordtaker.keyboard.wordtaker.backend.AuthSessionStore
 import com.wordtaker.keyboard.wordtaker.backend.BackendException
 import com.wordtaker.keyboard.wordtaker.backend.LoginResult
 import com.wordtaker.keyboard.wordtaker.backend.OrderInfo
-import com.wordtaker.keyboard.wordtaker.backend.OidcTokens
 import com.wordtaker.keyboard.wordtaker.backend.PlanInfo
 import com.wordtaker.keyboard.wordtaker.backend.PolishOutcome
 import com.wordtaker.keyboard.wordtaker.backend.QuotaInfo
@@ -83,28 +82,10 @@ class AccountRepositoryTest : FunSpec({
         }
     }
 
-    test("central OIDC login persists rotating tokens before profile hydration") {
+    test("independent login requires a nonblank userId and never trusts profile text alone") {
         runTest {
             val api = FakeAccountApi().apply {
-                authMeResponses += {
-                    JSONObject("""{"account":{"userId":"passport-user","phone":"13800138000"}}""")
-                }
-            }
-            val store = FakeAuthSessionStore()
-            val repository = repository(api, store)
-            val tokens = OidcTokens("oidc-access", "oidc-refresh", 2_000L)
-
-            repository.loginWithOidc(tokens).shouldBeInstanceOf<AccountResult.Ok<Unit>>()
-
-            store.oidcSession shouldBe tokens
-            store.token shouldBe "oidc-access"
-            repository.state.value.account?.userId shouldBe "passport-user"
-        }
-    }
-
-    test("central profile identity requires a nonblank userId and never trusts nickname or email alone") {
-        runTest {
-            val api = FakeAccountApi().apply {
+                loginResult = loginResult(account = null)
                 authMeResponses += {
                     JSONObject("""{"account":{"nickname":"同名用户","email":"shared@example.com"}}""")
                 }
@@ -112,7 +93,7 @@ class AccountRepositoryTest : FunSpec({
             val store = FakeAuthSessionStore()
             val repository = repository(api, store)
 
-            repository.loginWithOidc(OidcTokens("oidc-access", "oidc-refresh", 2_000L))
+            repository.loginWithEmail("cat@example.com", "123456")
                 .shouldBeInstanceOf<AccountResult.Ok<Unit>>()
 
             store.isLoggedIn() shouldBe true
@@ -174,6 +155,45 @@ class AccountRepositoryTest : FunSpec({
             store.token shouldBe null
             repository.state.value.profile shouldBe AccountProfileState.SignedOut
             repository.state.value.loggedIn shouldBe false
+        }
+    }
+
+    test("a 401 from an older request cannot clear a newer independent login") {
+        runTest {
+            val quotaEntered = CountDownLatch(1)
+            val releaseQuota = CountDownLatch(1)
+            val api = FakeAccountApi().apply {
+                quotaFailure = BackendException(
+                    BackendException.Kind.HTTP,
+                    "expired old request",
+                    status = 401,
+                )
+                quotaRequestEntered = quotaEntered
+                allowQuotaResponse = releaseQuota
+                authMeResponses += {
+                    JSONObject("""{"account":{"userId":"new-user","email":"new@example.com"}}""")
+                }
+            }
+            val store = FakeAuthSessionStore()
+            val repository = AccountRepository(
+                client = api,
+                tokenStore = store,
+                scope = backgroundScope,
+                ioDispatcher = Dispatchers.IO,
+            )
+
+            val oldRequest = async(Dispatchers.Default) { repository.refreshQuota() }
+            withContext(Dispatchers.IO) { quotaEntered.await(5, TimeUnit.SECONDS) } shouldBe true
+
+            api.loginResult = loginResult(account = null).copy(accessToken = "new-token")
+            repository.loginWithEmail("new@example.com", "123456")
+                .shouldBeInstanceOf<AccountResult.Ok<Unit>>()
+
+            releaseQuota.countDown()
+            oldRequest.await().shouldBeInstanceOf<AccountResult.Err>()
+
+            store.token shouldBe "new-token"
+            repository.state.value.account?.userId shouldBe "new-user"
         }
     }
 
@@ -438,40 +458,17 @@ private class FakeAuthSessionStore(
     private var storedAccount: AccountInfo? = null,
 ) : AuthSessionStore {
     private var generation = 0L
-    var oidcSession: OidcTokens? = null
+
     override fun credentialGeneration(): Long = generation
+
     override fun isLoggedIn(): Boolean = !token.isNullOrBlank()
 
     override fun account(): AccountInfo? = storedAccount
 
     override fun set(accessToken: String, account: AccountInfo?) {
         token = accessToken
-        oidcSession = null
         storedAccount = account
         generation += 1
-    }
-
-    override fun setOidc(tokens: OidcTokens, account: AccountInfo?) {
-        token = tokens.accessToken
-        oidcSession = tokens
-        storedAccount = account
-        generation += 1
-    }
-
-    override fun oidcTokens(): OidcTokens? = oidcSession
-
-    override fun updateOidcTokens(tokens: OidcTokens) {
-        token = tokens.accessToken
-        oidcSession = tokens
-    }
-
-    override fun clearOidc() {
-        if (oidcSession != null) {
-            token = null
-            oidcSession = null
-            storedAccount = null
-            generation += 1
-        }
     }
 
     override fun updateAccount(account: AccountInfo?) {
@@ -480,7 +477,6 @@ private class FakeAuthSessionStore(
 
     override fun clear() {
         token = null
-        oidcSession = null
         storedAccount = null
         generation += 1
     }
@@ -520,8 +516,6 @@ private class BlockingProfileUpdateStore(
         storedAccount = null
         generation += 1
     }
-
-    override fun clearOidc() = Unit
 }
 
 private class FakeAccountApi : AccountApi {
@@ -529,6 +523,8 @@ private class FakeAccountApi : AccountApi {
     val authMeResponses = ArrayDeque<() -> JSONObject>()
     var authMeCalls: Int = 0
     var quotaFailure: BackendException? = null
+    var quotaRequestEntered: CountDownLatch? = null
+    var allowQuotaResponse: CountDownLatch? = null
     var quotaResult: QuotaInfo = QuotaInfo(null, false, null, null, null, null, null)
     var redeemOutcome: RedeemOutcome = RedeemOutcome(null, null)
     var planList: List<PlanInfo> = emptyList()
@@ -542,6 +538,8 @@ private class FakeAccountApi : AccountApi {
     var orderCalls: Int = 0
 
     override fun getQuota(): QuotaInfo {
+        quotaRequestEntered?.countDown()
+        allowQuotaResponse?.let { check(it.await(5, TimeUnit.SECONDS)) }
         quotaFailure?.let { throw it }
         return quotaResult
     }

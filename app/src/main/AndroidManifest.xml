@@ -129,21 +129,12 @@
             android:theme="@style/FlorisAppTheme"
             android:exported="false"/>
 
-        <!-- Account/billing screen. Exported + BROWSABLE only for the exact registered
-             public-native OIDC callback; state + S256 PKCE are verified in-process. -->
+        <!-- WordTaker account/billing screen; application-internal only. -->
         <activity
             android:name="com.wordtaker.keyboard.wordtaker.ui.WordTakerAccountActivity"
             android:label="@string/floris_app_name"
             android:theme="@style/FlorisAppTheme"
-            android:launchMode="singleTask"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="kittyecho" android:host="auth"/>
-            </intent-filter>
-        </activity>
+            android:exported="false"/>
 
         <!-- WordTaker transparent RECORD_AUDIO permission relay (IME can't request) -->
         <activity

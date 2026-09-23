@@ -44,20 +44,6 @@ interface AuthSessionStore {
 
     fun set(accessToken: String, account: AccountInfo?)
 
-    /** OIDC credentials are always persisted as one encrypted, rotating session. */
-    fun setOidc(tokens: OidcTokens, account: AccountInfo?) {
-        set(tokens.accessToken, account)
-    }
-
-    fun oidcTokens(): OidcTokens? = null
-
-    fun updateOidcTokens(tokens: OidcTokens) {
-        setOidc(tokens, account())
-    }
-
-    /** Removes only central Passport credentials, preserving any legacy session. */
-    fun clearOidc()
-
     fun updateAccount(account: AccountInfo?)
 
     fun clear()

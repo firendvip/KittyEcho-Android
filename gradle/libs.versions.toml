@@ -16,7 +16,6 @@ androidx-window = "1.5.1"
 androidx-datastore = "1.1.7"
 androidx-lifecycle = "2.9.4"
 okhttp = "4.12.0"
-nimbus-jose-jwt = "10.9.1"
 cache4k = "0.14.0"
 coil = "3.4.0"
 kotlin = "2.3.20"
@@ -66,7 +65,6 @@ androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidx-lifecycle" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
-nimbus-jose-jwt = { module = "com.nimbusds:nimbus-jose-jwt", version.ref = "nimbus-jose-jwt" }
 androidx-window-core = { module = "androidx.window:window-core", version.ref = "androidx-window" }
 cache4k = { module = "io.github.reactivecircus.cache4k:cache4k", version.ref = "cache4k" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }

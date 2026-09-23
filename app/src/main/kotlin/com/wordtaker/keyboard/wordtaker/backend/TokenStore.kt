@@ -19,15 +19,21 @@ import javax.crypto.spec.GCMParameterSpec
  * Keystore 不可用时拒绝持久化 token。历史明文兼容值仅允许原地迁移为密文；
  * 无法迁移时立即删除，避免凭据继续以明文留存。
  */
-class TokenStore(context: Context) : AuthSessionStore {
+class TokenStore internal constructor(
+    private val storage: AuthStateStorage,
+    private val tokenCipher: TokenCipher,
+) : AuthSessionStore {
 
-    private val prefs = context.applicationContext
-        .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    constructor(
+        context: Context,
+        prefsName: String = PREFS_NAME,
+    ) : this(
+        storage = SharedPreferencesAuthStateStorage(context, prefsName),
+        tokenCipher = AndroidKeystoreTokenCipher,
+    )
 
     @Volatile
     private var cachedToken: String? = null
-    @Volatile
-    private var cachedOidcTokens: OidcTokens? = null
     @Volatile
     private var tokenLoaded = false
     private var generation = 0L
@@ -35,25 +41,20 @@ class TokenStore(context: Context) : AuthSessionStore {
     @Synchronized
     override fun credentialGeneration(): Long = generation
 
+    @Synchronized
+    fun authRequestSession(): AuthRequestSession = AuthRequestSession(
+        generation = generation,
+        accessToken = accessToken(),
+    )
+
     /** 仅返回 accessToken（无则 null）。 */
     fun accessToken(): String? {
-        loadTokensIfNeeded()
-        return cachedOidcTokens?.accessToken ?: cachedToken
-    }
-
-    /** Returns only a pre-Passport business token and never exposes OIDC credentials. */
-    fun legacyAccessToken(): String? {
-        loadTokensIfNeeded()
-        return cachedToken
-    }
-
-    private fun loadTokensIfNeeded() {
-        if (tokenLoaded) return
+        if (tokenLoaded) return cachedToken
         synchronized(this) {
-            if (tokenLoaded) return
-            cachedOidcTokens = readOidcTokens()
-            cachedToken = if (cachedOidcTokens == null) readToken() else null
+            if (tokenLoaded) return cachedToken
+            cachedToken = readToken()
             tokenLoaded = true
+            return cachedToken
         }
     }
 
@@ -63,90 +64,56 @@ class TokenStore(context: Context) : AuthSessionStore {
     override fun set(accessToken: String, account: AccountInfo?) {
         require(accessToken.isNotBlank()) { "TokenStore.set 需要 accessToken" }
         synchronized(this) {
-            val encrypted = encrypt(accessToken)
+            val encrypted = tokenCipher.encrypt(accessToken)
                 ?: throw IllegalStateException("系统安全存储暂不可用")
-            val editor = prefs.edit()
-            editor.putString(KEY_TOKEN_ENC, encrypted)
-                .remove(KEY_TOKEN_PLAIN)
-                .remove(KEY_OIDC_SESSION_ENC)
-            editor.putString(KEY_ACCOUNT, account?.toJson()?.toString())
-            editor.apply()
+            storage.update(
+                strings = mapOf(
+                    KEY_TOKEN_ENC to encrypted,
+                    KEY_LEGACY_ACCOUNT to account?.toJson()?.toString(),
+                ),
+                booleans = mapOf(KEY_LEGACY_ACCOUNT_INITIALIZED to true),
+                removals = setOf(KEY_TOKEN_PLAIN),
+            )
             cachedToken = accessToken
-            cachedOidcTokens = null
             tokenLoaded = true
             generation += 1
         }
     }
 
-    override fun setOidc(tokens: OidcTokens, account: AccountInfo?) {
-        require(tokens.isValidStoredSession()) { "OIDC session is invalid" }
-        synchronized(this) {
-            val encrypted = encrypt(tokens.toJson().toString())
-                ?: throw IllegalStateException("系统安全存储暂不可用")
-            prefs.edit()
-                .putString(KEY_OIDC_SESSION_ENC, encrypted)
-                .remove(KEY_TOKEN_ENC)
-                .remove(KEY_TOKEN_PLAIN)
-                .putString(KEY_ACCOUNT, account?.toJson()?.toString())
-                .apply()
-            cachedOidcTokens = tokens
-            cachedToken = null
-            tokenLoaded = true
-            generation += 1
-        }
+    /** 只为有效的独立业务令牌读取摘要；共享旧值可能属于已停用的统一登录。 */
+    override fun account(): AccountInfo? {
+        if (!isLoggedIn()) return null
+        return runCatching {
+            val value = if (storage.getBoolean(KEY_LEGACY_ACCOUNT_INITIALIZED)) {
+                storage.getString(KEY_LEGACY_ACCOUNT)
+            } else {
+                storage.getString(KEY_ACCOUNT)
+            }
+            value?.let { AccountInfoJson.from(JSONObject(it)) }
+        }.getOrNull()
     }
-
-    override fun oidcTokens(): OidcTokens? {
-        accessToken()
-        return cachedOidcTokens
-    }
-
-    override fun updateOidcTokens(tokens: OidcTokens) {
-        require(tokens.isValidStoredSession()) { "OIDC session is invalid" }
-        synchronized(this) {
-            val encrypted = encrypt(tokens.toJson().toString())
-                ?: throw IllegalStateException("系统安全存储暂不可用")
-            prefs.edit().putString(KEY_OIDC_SESSION_ENC, encrypted).apply()
-            cachedOidcTokens = tokens
-            cachedToken = null
-            tokenLoaded = true
-        }
-    }
-
-    override fun clearOidc() {
-        synchronized(this) {
-            prefs.edit()
-                .remove(KEY_OIDC_SESSION_ENC)
-                .remove(KEY_ACCOUNT)
-                .apply()
-            cachedOidcTokens = null
-            cachedToken = null
-            tokenLoaded = false
-            generation += 1
-        }
-    }
-
-    /** 读取账号摘要（无则 null）。 */
-    override fun account(): AccountInfo? = runCatching {
-        prefs.getString(KEY_ACCOUNT, null)?.let { AccountInfoJson.from(JSONObject(it)) }
-    }.getOrNull()
 
     /** 更新账号摘要（token 不变）。 */
     override fun updateAccount(account: AccountInfo?) {
-        prefs.edit().putString(KEY_ACCOUNT, account?.toJson()?.toString()).apply()
+        if (!isLoggedIn()) return
+        storage.update(
+            strings = mapOf(KEY_LEGACY_ACCOUNT to account?.toJson()?.toString()),
+            booleans = mapOf(KEY_LEGACY_ACCOUNT_INITIALIZED to true),
+        )
     }
 
     /** 退出登录 / token 失效时清空。 */
     override fun clear() {
         synchronized(this) {
-            prefs.edit()
-                .remove(KEY_TOKEN_ENC)
-                .remove(KEY_TOKEN_PLAIN)
-                .remove(KEY_OIDC_SESSION_ENC)
-                .remove(KEY_ACCOUNT)
-                .apply()
+            storage.update(
+                removals = setOf(
+                    KEY_TOKEN_ENC,
+                    KEY_TOKEN_PLAIN,
+                    KEY_LEGACY_ACCOUNT,
+                    KEY_LEGACY_ACCOUNT_INITIALIZED,
+                ),
+            )
             cachedToken = null
-            cachedOidcTokens = null
             tokenLoaded = true
             generation += 1
         }
@@ -155,33 +122,78 @@ class TokenStore(context: Context) : AuthSessionStore {
     // —— 加解密（Android Keystore AES/GCM）——
 
     private fun readToken(): String? {
-        prefs.getString(KEY_TOKEN_ENC, null)?.let { enc ->
-            decrypt(enc)?.let { return it }
+        storage.getString(KEY_TOKEN_ENC)?.let { enc ->
+            tokenCipher.decrypt(enc)?.let { return it }
         }
-        val legacy = prefs.getString(KEY_TOKEN_PLAIN, null)?.takeIf { it.isNotBlank() }
+        val legacy = storage.getString(KEY_TOKEN_PLAIN)?.takeIf { it.isNotBlank() }
             ?: return null
-        val migrated = encrypt(legacy)
+        val migrated = tokenCipher.encrypt(legacy)
         if (migrated == null) {
-            prefs.edit().remove(KEY_TOKEN_PLAIN).apply()
+            storage.update(removals = setOf(KEY_TOKEN_PLAIN))
             return null
         }
-        prefs.edit()
-            .putString(KEY_TOKEN_ENC, migrated)
-            .remove(KEY_TOKEN_PLAIN)
-            .apply()
+        storage.update(
+            strings = mapOf(KEY_TOKEN_ENC to migrated),
+            removals = setOf(KEY_TOKEN_PLAIN),
+        )
         return legacy
     }
 
-    private fun readOidcTokens(): OidcTokens? {
-        val encrypted = prefs.getString(KEY_OIDC_SESSION_ENC, null) ?: return null
-        val parsed = decrypt(encrypted)?.let { value ->
-            runCatching { JSONObject(value).toOidcTokens() }.getOrNull()
-        }?.takeIf(OidcTokens::isValidStoredSession)
-        if (parsed == null) prefs.edit().remove(KEY_OIDC_SESSION_ENC).apply()
-        return parsed
+    private companion object {
+        const val PREFS_NAME = "wt_backend_auth"
+        const val KEY_TOKEN_ENC = "token_enc"
+        const val KEY_TOKEN_PLAIN = "token_plain"
+        const val KEY_LEGACY_ACCOUNT = "legacy_account_json"
+        const val KEY_LEGACY_ACCOUNT_INITIALIZED = "legacy_account_initialized"
+        // Retained for read-only compatibility with pre-rollback independent profiles.
+        const val KEY_ACCOUNT = "account_json"
     }
+}
 
-    private fun encrypt(plain: String): String? = runCatching {
+internal interface AuthStateStorage {
+    fun getString(key: String): String?
+
+    fun getBoolean(key: String): Boolean
+
+    fun update(
+        strings: Map<String, String?> = emptyMap(),
+        booleans: Map<String, Boolean> = emptyMap(),
+        removals: Set<String> = emptySet(),
+    )
+}
+
+internal interface TokenCipher {
+    fun encrypt(plain: String): String?
+
+    fun decrypt(stored: String): String?
+}
+
+private class SharedPreferencesAuthStateStorage(
+    context: Context,
+    prefsName: String,
+) : AuthStateStorage {
+    private val prefs = context.applicationContext
+        .getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+
+    override fun getString(key: String): String? = prefs.getString(key, null)
+
+    override fun getBoolean(key: String): Boolean = prefs.getBoolean(key, false)
+
+    override fun update(
+        strings: Map<String, String?>,
+        booleans: Map<String, Boolean>,
+        removals: Set<String>,
+    ) {
+        val editor = prefs.edit()
+        removals.forEach(editor::remove)
+        strings.forEach(editor::putString)
+        booleans.forEach(editor::putBoolean)
+        editor.apply()
+    }
+}
+
+private object AndroidKeystoreTokenCipher : TokenCipher {
+    override fun encrypt(plain: String): String? = runCatching {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, obtainKey())
         val ct = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
@@ -189,7 +201,7 @@ class TokenStore(context: Context) : AuthSessionStore {
             Base64.encodeToString(ct, Base64.NO_WRAP)
     }.getOrNull()
 
-    private fun decrypt(stored: String): String? = runCatching {
+    override fun decrypt(stored: String): String? = runCatching {
         val parts = stored.split(":", limit = 2)
         if (parts.size != 2) return null
         val iv = Base64.decode(parts[0], Base64.NO_WRAP)
@@ -215,37 +227,11 @@ class TokenStore(context: Context) : AuthSessionStore {
         return generator.generateKey()
     }
 
-    private companion object {
-        const val PREFS_NAME = "wt_backend_auth"
-        const val KEY_TOKEN_ENC = "token_enc"
-        const val KEY_OIDC_SESSION_ENC = "oidc_session_enc"
-        const val KEY_TOKEN_PLAIN = "token_plain"
-        const val KEY_ACCOUNT = "account_json"
-        const val KEYSTORE = "AndroidKeyStore"
-        const val KEY_ALIAS = "wt_backend_token"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val GCM_TAG_BITS = 128
-    }
+    private const val KEYSTORE = "AndroidKeyStore"
+    private const val KEY_ALIAS = "wt_backend_token"
+    private const val TRANSFORMATION = "AES/GCM/NoPadding"
+    private const val GCM_TAG_BITS = 128
 }
-
-private fun OidcTokens.toJson(): JSONObject = JSONObject()
-    .put("accessToken", accessToken)
-    .putOpt("refreshToken", refreshToken)
-    .put("expiresAtEpochSeconds", expiresAtEpochSeconds)
-
-private fun JSONObject.toOidcTokens(): OidcTokens = OidcTokens(
-    accessToken = optString("accessToken"),
-    refreshToken = optString("refreshToken").takeIf(String::isNotBlank),
-    expiresAtEpochSeconds = optLong("expiresAtEpochSeconds", -1L),
-)
-
-private fun OidcTokens.isValidStoredSession(): Boolean =
-    accessToken.length in 8..8192 &&
-        accessToken.none { it.isWhitespace() || it.isISOControl() } &&
-        (refreshToken == null || (
-            refreshToken.length in 8..8192 && refreshToken.none { it.isWhitespace() || it.isISOControl() }
-        )) &&
-        expiresAtEpochSeconds > 0
 
 /** AccountInfo <-> JSON（TokenStore 持久化用）。 */
 private fun AccountInfo.toJson(): JSONObject = JSONObject()

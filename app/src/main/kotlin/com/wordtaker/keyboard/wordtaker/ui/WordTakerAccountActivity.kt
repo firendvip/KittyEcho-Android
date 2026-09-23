@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -32,6 +33,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,23 +46,21 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import com.wordtaker.keyboard.wordtaker.account.AccountProfileState
 import com.wordtaker.keyboard.wordtaker.account.AccountRepository
 import com.wordtaker.keyboard.wordtaker.account.AccountResult
-import com.wordtaker.keyboard.wordtaker.account.PassportLoginController
-import com.wordtaker.keyboard.wordtaker.account.PassportLoginStatus
-import com.wordtaker.keyboard.wordtaker.account.PassportStartResult
 import com.wordtaker.keyboard.wordtaker.backend.PlanInfo
 import com.wordtaker.keyboard.wordtaker.di.AppGraph
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * 账户/额度页：登录状态、云端剩余额度、望三通行证（系统浏览器 OIDC + S256 PKCE）、
- * 兑换码、套餐入口（仅到「跳转支付页」）。
+ * 账户/额度页（阶段3）：登录状态、云端剩余额度、邮箱验证码登录、兑换码、
+ * 套餐入口（仅到「跳转支付页」）。
  *
  * 未登录时后端匿名走设备额度（x-device-id），额度卡片对匿名同样可见。
  */
@@ -73,31 +73,8 @@ class WordTakerAccountActivity : ComponentActivity() {
             WordTakerTheme {
                 AccountScreen(
                     repository = AppGraph.accountRepository,
-                    passportLogin = AppGraph.passportLogin,
                     onBack = { finish() },
                 )
-            }
-        }
-        handlePassportCallback(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handlePassportCallback(intent)
-    }
-
-    /** Exact kittyecho://auth callback is validated and consumed by the PKCE state machine. */
-    private fun handlePassportCallback(intent: Intent?) {
-        val callback = intent?.data?.toString() ?: return
-        intent.data = null
-        lifecycleScope.launch {
-            when (val result = AppGraph.passportLogin.handleCallback(callback)) {
-                is AccountResult.Ok -> {
-                    Toast.makeText(this@WordTakerAccountActivity, "登录成功", Toast.LENGTH_SHORT).show()
-                    AppGraph.accountRepository.refreshQuota()
-                }
-                is AccountResult.Err ->
-                    Toast.makeText(this@WordTakerAccountActivity, result.message, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -105,12 +82,11 @@ class WordTakerAccountActivity : ComponentActivity() {
 
 /**
  * 账户/额度页内容。item6: 抽为可共用的 Composable —— App 主设置页 (MinimalSettingsScreen)
- * 以同窗口子页方式内嵌它；本 Activity 仅保留给微信 deep link 回跳兼容。
+ * 以同窗口子页方式内嵌它；本 Activity 仅作为应用内账户页面保留。
  */
 @Composable
 internal fun AccountScreen(
     repository: AccountRepository,
-    passportLogin: PassportLoginController,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -155,9 +131,9 @@ internal fun AccountScreen(
                 Spacer(Modifier.height(20.dp))
 
                 if (!state.loggedIn) {
-                    LoginSection(passportLogin, onMessage = ::show)
+                    LoginSection(repository, onMessage = ::show)
                 } else {
-                    LoggedInSection(repository, passportLogin, onMessage = ::show)
+                    LoggedInSection(repository, onMessage = ::show)
                 }
 
                 Spacer(Modifier.height(24.dp))
@@ -201,73 +177,101 @@ private fun QuotaSection(
     }
 }
 
-// —— 未登录：中央托管的手机号验证码 + 微信 ——
+// —— 未登录：邮箱验证码 ——
 
 @Composable
 private fun LoginSection(
-    passportLogin: PassportLoginController,
+    repository: AccountRepository,
     onMessage: (String) -> Unit,
 ) {
-    val context = LocalContext.current
-    val status by passportLogin.status.collectAsStateWithLifecycle()
-    val busy = status is PassportLoginStatus.Exchanging
+    val scope = rememberCoroutineScope()
+    var email by rememberSaveable { mutableStateOf("") }
+    var code by rememberSaveable { mutableStateOf("") }
+    var sending by remember { mutableStateOf(false) }
+    var loggingIn by remember { mutableStateOf(false) }
+    var countdown by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(countdown) {
+        if (countdown > 0) {
+            delay(1000)
+            countdown -= 1
+        }
+    }
+
+    val emailValid = EMAIL_REGEX.matches(email.trim())
+    val codeValid = CODE_REGEX.matches(code.trim())
 
     SectionLabel("登录")
     Card {
         Column {
-            Text(
-                text = "望三通行证",
-                fontSize = 17.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
+            OutlinedTextField(
+                value = email,
+                onValueChange = { email = it },
+                label = { Text("邮箱") },
+                singleLine = true,
+                isError = email.isNotBlank() && !emailValid,
+                supportingText = {
+                    if (email.isNotBlank() && !emailValid) Text("邮箱格式不正确")
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = "将在系统浏览器中打开，仅提供手机号验证码和微信登录；微信可使用快捷确认或扫码切换。",
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it.filter(Char::isDigit).take(8) },
+                    label = { Text("验证码") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(
+                    enabled = emailValid && !sending && countdown == 0,
+                    onClick = {
+                        sending = true
+                        scope.launch {
+                            when (val r = repository.sendEmailCode(email.trim())) {
+                                is AccountResult.Ok -> {
+                                    onMessage("验证码已发送")
+                                    countdown = RESEND_SECONDS
+                                }
+                                is AccountResult.Err -> onMessage(r.message)
+                            }
+                            sending = false
+                        }
+                    },
+                ) {
+                    Text(if (countdown > 0) "${countdown}s" else "发送验证码")
+                }
+            }
             Spacer(Modifier.height(12.dp))
             Button(
-                enabled = passportLogin.isAvailable && !busy,
+                enabled = emailValid && codeValid && !loggingIn,
                 onClick = {
-                    when (val start = passportLogin.begin()) {
-                        is PassportStartResult.Ready -> {
-                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(start.authorizationUrl))
-                                .addCategory(Intent.CATEGORY_BROWSABLE)
-                            val opened = runCatching {
-                                context.startActivity(browserIntent)
-                            }.isSuccess
-                            if (!opened) {
-                                passportLogin.cancel()
-                                onMessage("未找到可用的系统浏览器")
-                            }
+                    loggingIn = true
+                    scope.launch {
+                        when (val r = repository.loginWithEmail(email.trim(), code.trim())) {
+                            is AccountResult.Ok -> onMessage("登录成功")
+                            is AccountResult.Err -> onMessage(r.message)
                         }
-                        is PassportStartResult.Unavailable -> onMessage(start.message)
+                        loggingIn = false
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                if (busy) {
+                if (loggingIn) {
                     CircularProgressIndicator(Modifier.height(18.dp).width(18.dp), strokeWidth = 2.dp)
                 } else {
-                    Text("望三通行证登录")
+                    Text("登录")
                 }
             }
-            val statusText = when (val current = status) {
-                PassportLoginStatus.Idle -> if (passportLogin.isAvailable) {
-                    "未登录也可使用：本机自带免费云端额度"
-                } else {
-                    "统一登录尚未启用或配置不完整"
-                }
-                PassportLoginStatus.AwaitingBrowser -> "正在等待浏览器完成登录"
-                PassportLoginStatus.Exchanging -> "正在安全完成登录…"
-                is PassportLoginStatus.Error -> current.message
-            }
-            Text(statusText, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (status is PassportLoginStatus.AwaitingBrowser) {
-                TextButton(onClick = passportLogin::cancel) { Text("取消登录") }
-            }
+            Text(
+                text = "未登录也可使用：本机自带免费云端额度",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -277,7 +281,6 @@ private fun LoginSection(
 @Composable
 private fun LoggedInSection(
     repository: AccountRepository,
-    passportLogin: PassportLoginController,
     onMessage: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -319,6 +322,7 @@ private fun LoggedInSection(
                     val account = profile.account
                     Text(
                         text = account.nickname
+                            ?: account.email
                             ?: account.phone
                             ?: "已登录",
                         fontSize = 16.sp,
@@ -344,7 +348,7 @@ private fun LoggedInSection(
             }
             Spacer(Modifier.height(4.dp))
             TextButton(onClick = {
-                passportLogin.logout()
+                repository.logout()
                 onMessage("已退出登录")
             }) { Text("退出登录", color = MaterialTheme.colorScheme.error) }
         }
@@ -494,4 +498,7 @@ private fun Card(content: @Composable () -> Unit) {
     }
 }
 
+private val EMAIL_REGEX = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
+private val CODE_REGEX = Regex("^\\d{4,8}$")
+private const val RESEND_SECONDS = 60
 private const val PAY_CHANNEL = "alipay"

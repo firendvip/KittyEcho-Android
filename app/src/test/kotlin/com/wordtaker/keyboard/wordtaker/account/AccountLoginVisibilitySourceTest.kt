@@ -6,56 +6,59 @@ import java.io.File
 
 class AccountLoginVisibilitySourceTest : FunSpec({
 
-    test("ordinary account UI exposes only the central two-method passport entry") {
-        val moduleRoot = sequenceOf(File("."), File("app"))
-            .first { File(it, "src/main").isDirectory }
-            .canonicalFile
-        val source = File(
-            moduleRoot,
-            "src/main/kotlin/com/wordtaker/keyboard/wordtaker/ui/WordTakerAccountActivity.kt",
-        ).readText()
-        val imeSettings = File(
-            moduleRoot,
-            "src/main/kotlin/com/wordtaker/keyboard/wordtaker/settings/ImeSettingsLayout.kt",
-        ).readText()
-
-        source.contains("望三通行证登录") shouldBe true
-        source.contains("手机号验证码和微信") shouldBe true
-        source.contains("passportLogin.begin()") shouldBe true
-
-        source.contains("repository.sendEmailCode(") shouldBe false
-        source.contains("repository.loginWithEmail(") shouldBe false
-        source.contains("repository.sendSmsCode(") shouldBe false
-        source.contains("repository.loginWithSms(") shouldBe false
-        source.contains("repository.wechatAuthUrl(") shouldBe false
-        source.contains("repo.loginWithWechatCode(") shouldBe false
-        source.contains("KeyboardType.Email") shouldBe false
-        source.contains("邮箱验证码") shouldBe false
-        source.contains("其他登录方式") shouldBe false
-        source.contains("忘记密码") shouldBe false
-        source.contains("重置密码") shouldBe false
-        source.contains("?: account.email") shouldBe false
-        imeSettings.contains("state.account?.email") shouldBe false
-        imeSettings.contains("邮箱/验证码") shouldBe false
-    }
-
-    test("callback entry delegates to the PKCE flow instead of trusting a raw code") {
-        val moduleRoot = sequenceOf(File("."), File("app"))
-            .first { File(it, "src/main").isDirectory }
-            .canonicalFile
+    test("account UI restores independent email login without re-exposing a deep link callback") {
+        val moduleRoot = moduleRoot()
         val source = File(
             moduleRoot,
             "src/main/kotlin/com/wordtaker/keyboard/wordtaker/ui/WordTakerAccountActivity.kt",
         ).readText()
         val manifest = File(moduleRoot, "src/main/AndroidManifest.xml").readText()
-        val callbackActivity = manifest.substringAfter("WordTakerAccountActivity")
-            .substringBefore("</activity>")
+        val accountActivity = manifest.substringAfter("WordTakerAccountActivity")
+            .substringBefore("/>")
 
-        source.contains("passportLogin.handleCallback(") shouldBe true
+        source.contains("repository.sendEmailCode(") shouldBe true
+        source.contains("repository.loginWithEmail(") shouldBe true
+        source.contains("KeyboardType.Email") shouldBe true
+        source.contains("repo.loginWithWechatCode(code)") shouldBe false
         source.contains("getQueryParameter(\"code\")") shouldBe false
-        source.contains("loginWithWechatCode") shouldBe false
-        callbackActivity.contains("android:scheme=\"kittyecho\"") shouldBe true
-        callbackActivity.contains("android:host=\"auth\"") shouldBe true
-        callbackActivity.contains("android:path") shouldBe false
+        source.contains("passportLogin") shouldBe false
+        source.contains("望三通行证") shouldBe false
+        accountActivity.contains("android:exported=\"false\"") shouldBe true
+        accountActivity.contains("intent-filter") shouldBe false
+    }
+
+    test("Passport runtime configuration and dependencies are absent") {
+        val repositoryRoot = moduleRoot().parentFile
+        val gradleProperties = File(repositoryRoot, "gradle.properties").readText()
+        val appBuild = File(repositoryRoot, "app/build.gradle.kts").readText()
+        val versions = File(repositoryRoot, "gradle/libs.versions.toml").readText()
+
+        gradleProperties.contains("wangsanPassport", ignoreCase = true) shouldBe false
+        gradleProperties.contains("auth.yaa3.com", ignoreCase = true) shouldBe false
+        appBuild.contains("WANGSAN_PASSPORT") shouldBe false
+        versions.contains("nimbus-jose-jwt") shouldBe false
+    }
+
+    test("user-visible app title follows the single 0.44.0 version increment") {
+        val moduleRoot = moduleRoot()
+        File(moduleRoot, "src/main/res/values/strings.xml")
+            .readText().contains("弦外小猫 v0.44.0") shouldBe true
+        File(moduleRoot, "src/main/res/values-zh-rCN/strings.xml")
+            .readText().contains("弦外小猫 v0.44.0") shouldBe true
+    }
+
+    test("legacy token store ignores retained Passport data instead of deleting it") {
+        val source = File(
+            moduleRoot(),
+            "src/main/kotlin/com/wordtaker/keyboard/wordtaker/backend/TokenStore.kt",
+        ).readText()
+
+        source.contains("oidc_session_enc") shouldBe false
+        source.contains("KEY_OIDC_SESSION_ENC") shouldBe false
+        source.contains("KEY_TOKEN_ENC") shouldBe true
     }
 })
+
+private fun moduleRoot(): File = sequenceOf(File("."), File("app"))
+    .first { File(it, "src/main").isDirectory }
+    .canonicalFile

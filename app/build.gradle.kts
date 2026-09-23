@@ -42,11 +42,6 @@ val projectTargetSdk: String by project
 val projectCompileSdk: String by project
 val projectVersionCode: String by project
 val projectVersionName: String by project
-val wangsanPassportEnabled = providers.gradleProperty("wangsanPassportEnabled")
-    .orElse("false").get().toBooleanStrictOrNull() ?: false
-val wangsanPassportIssuer = providers.gradleProperty("wangsanPassportIssuer").orElse("").get()
-val wangsanPassportClientId = providers.gradleProperty("wangsanPassportClientId").orElse("").get()
-val wangsanPassportRedirectUri = providers.gradleProperty("wangsanPassportRedirectUri").orElse("").get()
 val projectVersionNameSuffix = projectVersionName.substringAfter("-", "").let { suffix ->
     if (suffix.isNotEmpty()) {
         "-$suffix"
@@ -149,10 +144,6 @@ configure<ApplicationExtension> {
         buildConfigField("String", "BUILD_COMMIT_HASH", "\"${getGitCommitHash().get()}\"")
         buildConfigField("String", "FLADDONS_API_VERSION", "\"v~draft2\"")
         buildConfigField("String", "FLADDONS_STORE_URL", "\"beta.addons.florisboard.org\"")
-        buildConfigField("boolean", "WANGSAN_PASSPORT_ENABLED", wangsanPassportEnabled.toString())
-        buildConfigField("String", "WANGSAN_PASSPORT_ISSUER", wangsanPassportIssuer.asBuildConfigString())
-        buildConfigField("String", "WANGSAN_PASSPORT_CLIENT_ID", wangsanPassportClientId.asBuildConfigString())
-        buildConfigField("String", "WANGSAN_PASSPORT_REDIRECT_URI", wangsanPassportRedirectUri.asBuildConfigString())
 
         sourceSets {
             maybeCreate("main").apply {
@@ -338,7 +329,6 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.nimbus.jose.jwt)
     implementation(libs.okhttp)
     // sherpa-onnx (k2-fsa) on-device ASR. Official prebuilt AAR from GitHub releases
     // (no Maven Central artifact exists for com.k2-fsa). The AAR bundles the
@@ -391,6 +381,3 @@ fun getGitCommitHash(short: Boolean = false): Provider<String> {
     }
     return execProvider.standardOutput.asText.map { it.trim() }
 }
-
-fun String.asBuildConfigString(): String =
-    "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
